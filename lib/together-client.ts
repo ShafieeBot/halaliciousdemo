@@ -16,7 +16,7 @@ CRITICAL: After using the 'queryDatabase' tool, your final response MUST still b
 - If the user asked to "show" or "find" places, YOU MUST update the 'filter' object so the map updates!
 - For example, if you found 3 ramen places, set "filter": { "cuisine_subtype": "Ramen" }.
 - If recommending a SPECIFIC place (like "Fortune Tree"), set "filter": { "keyword": "Fortune Tree" }.
-- If the user specifies a LOCATION (e.g. "Ramen in Asakusa"), set "filter": { "cuisine_subtype": "Ramen", "keyword": "Asakusa" }.
+- If the user specifies a LOCATION (e.g. "Ramen in Asakusa"), set "filter": { "cuisine_subtype": "Raman", "keyword": "Asakusa" }.
 
 Response Format:
 {
@@ -33,11 +33,11 @@ Response Format:
 `;
 
 export async function chatWithApriel(messages: ChatCompletionMessageParam[]) {
-  // Normalize messages to ensure content is always a string
-  const safeMessages = messages.map((m) => ({
+  // FIX: Ensure all message content is a string (Together AI types require this)
+  const safeMessages: ChatCompletionMessageParam[] = messages.map((m) => ({
     ...m,
-    content: (m as { content?: string }).content ?? "",
-  })) as ChatCompletionMessageParam[];
+    content: (m.content ?? "") as string,
+  }));
 
   const response = await together.chat.completions.create({
     model: "ServiceNow-AI/Apriel-1.6-15b-Thinker",
