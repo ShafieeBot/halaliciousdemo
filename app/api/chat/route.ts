@@ -33,7 +33,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid messages format." }, { status: 400 });
     }
 
-    // ✅ Use your app's message type for chatWithApriel
+    // Convert incoming messages to your internal type
     const aprielMessages: AprielMessage[] = toAprielMessages(messages);
 
     // First call to Apriel
@@ -55,11 +55,14 @@ export async function POST(req: Request) {
         console.log("Using queryDatabase tool:", args);
 
         // Execute Supabase query
-        let query = supabase.from("places").select("name, cuisine_subtype, city, address");
+        let query = supabase
+          .from("places")
+          .select("name, cuisine_subtype, city, address");
 
         if (args.cuisine) {
           query = query.ilike("cuisine_subtype", `%${args.cuisine}%`);
         }
+
         if (args.keyword) {
           query = query.or(
             `name.ilike.%${args.keyword}%,address.ilike.%${args.keyword}%,city.ilike.%${args.keyword}%`
@@ -86,12 +89,20 @@ export async function POST(req: Request) {
           }
         }
 
-        // ✅ Second call messages in AprielMessage[] format (NOT ChatCompletionMessageParam[])
+        /**
+         * Second call:
+         * - We pass prior user conversation (aprielMessages)
+         * - Add an assistant "bridge" message (content can be empty)
+         * - Add the tool result with tool_call_id
+         *
+         * Note: We intentionally avoid passing Together's complex tool-call assistant structure
+         * through our internal Message type to keep TS + build stable.
+         */
         const secondCallMessages: AprielMessage[] = [
           ...aprielMessages,
           {
             role: "assistant",
-            content: normalizeContent(message.content), // may be null in tool-call messages
+            content: normalizeContent(message.content), // may be empty for tool-call messages
           },
           {
             role: "tool",
@@ -101,13 +112,13 @@ export async function POST(req: Request) {
         ];
 
         const finalCompletion = await chatWithApriel(secondCallMessages);
-
         const finalChoice = finalCompletion.choices?.[0];
+
         if (!finalChoice || !finalChoice.message) {
           return NextResponse.json({ error: "Invalid response from AI service" }, { status: 500 });
         }
 
-        let finalContent = finalChoice.message?.content ?? "{}";
+        let finalContent = finalChoice.message.content ?? "{}";
 
         // Inject actual place data into response
         try {
