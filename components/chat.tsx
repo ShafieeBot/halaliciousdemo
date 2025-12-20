@@ -17,7 +17,7 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [messages, setMessages] = useState<ChatMsg[]>([]);
-  const [lastFilter, setLastFilter] = useState<any>({}); // ✅ context memory for follow-ups
+  const [lastFilter, setLastFilter] = useState<any>({}); // context memory for follow-ups
 
   const handleClear = () => {
     setMessages([]);
@@ -32,7 +32,7 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: messageMessages.map((m) => ({ role: m.role, content: m.content })), // cleanse places from history
-          context: { lastFilter }, // ✅ send last known filter
+          context: { lastFilter },
         }),
       });
 
@@ -67,11 +67,35 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
         throw new Error(data?.error || `Failed to connect to AI service. (${response.status})`);
       }
 
-      // Your API returns: { role: 'assistant', content: '...JSON STRING...' }
-      const content: string = typeof data?.content === 'string' ? data.content : '';
+      /**
+       * ✅ Support BOTH API formats:
+       *
+       * OLD:
+       *   { content: "{ \"filter\": {...}, \"message\": \"...\" }" }
+       *
+       * NEW:
+       *   { filter: {...}, message: "..." }
+       */
+      let parsed: any = null;
 
-      if (!content.trim()) {
-        console.warn('Empty AI content from API:', data);
+      // Old format: JSON string inside data.content
+      if (typeof data?.content === 'string' && data.content.trim()) {
+        try {
+          parsed = JSON.parse(data.content);
+        } catch (err) {
+          console.error('Failed to parse AI JSON string in data.content. Raw:', data.content);
+          parsed = null;
+        }
+      }
+
+      // New format: already parsed object with filter/message
+      if (!parsed && data && typeof data === 'object') {
+        const hasFilterOrMessage = 'filter' in data || 'message' in data;
+        if (hasFilterOrMessage) parsed = data;
+      }
+
+      if (!parsed) {
+        console.warn('Empty/invalid AI response object from API:', data);
         setMessages((prev) => [
           ...prev,
           { role: 'assistant', content: "I didn’t get a response. Please try again." },
@@ -79,25 +103,15 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
         return;
       }
 
-      // Parse JSON from AI content
-      let parsed: any;
-      try {
-        parsed = JSON.parse(content);
-      } catch (err) {
-        console.error('Failed to parse AI JSON. Raw content:', content);
-        setMessages((prev) => [
-          ...prev,
-          { role: 'assistant', content: "I couldn't understand that. Try asking differently." },
-        ]);
-        return;
-      }
-
+      // Normalize shape
       parsed.filter = parsed.filter || {};
-      parsed.message = typeof parsed.message === 'string' ? parsed.message : "Okay, I've updated the map.";
+      parsed.message = typeof parsed.message === 'string' && parsed.message.trim()
+        ? parsed.message
+        : "Okay, I've updated the map.";
 
       let chatPlaces = parsed.places;
 
-      // Intercept Favorites intent
+      // Intercept Favorites intent (kept for backwards compatibility)
       if (parsed.filter && parsed.filter.favorites) {
         console.log('Intercepting Favorites Filter');
         const favIds = JSON.parse(localStorage.getItem('halal_favorites') || '[]');
@@ -219,13 +233,9 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
                         onClick={() => onSelectPlace(place.name)}
                         className="w-full text-left py-1 px-1 hover:bg-gray-50 rounded transition flex items-start gap-2 group"
                       >
-                        <div className="mt-0.5 text-blue-500 group-hover:text-blue-600">
-                          <MapPin className="w-4 h-4" />
-                        </div>
+                        <MapPin className="w-4 h-4 mt-0.5 text-gray-400 group-hover:text-blue-500" />
                         <div>
-                          <div className="text-sm font-medium text-gray-800 group-hover:text-blue-700 underline-offset-2 group-hover:underline">
-                            {place.name}
-                          </div>
+                          <div className="text-sm font-medium text-gray-800">{place.name}</div>
                           <div className="text-xs text-gray-500">{place.cuisine}</div>
                         </div>
                       </button>
@@ -238,30 +248,29 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
         ))}
 
         {loading && (
-          <div className="flex justify-start">
-            <div className="bg-gray-100 rounded-2xl px-4 py-2">
-              <Sparkles className="w-4 h-4 animate-spin text-gray-400" />
-            </div>
+          <div className="flex items-start">
+            <div className="bg-gray-100 text-gray-700 rounded-2xl px-4 py-2 text-sm">Thinking…</div>
           </div>
         )}
       </div>
 
-      <div className="p-4 border-t border-gray-100 bg-white">
-        <form onSubmit={handleSubmit} className="flex gap-2">
+      <form onSubmit={handleSubmit} className="p-4 border-t border-gray-100 bg-white">
+        <div className="flex items-center gap-2">
           <input
-            className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-            placeholder="Ask a question..."
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            className="flex-1 px-4 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-200 text-sm"
+            placeholder="Ask a question..."
           />
           <button
+            type="submit"
             disabled={loading}
-            className="bg-blue-600 text-white p-2 rounded-xl hover:bg-blue-700 transition disabled:opacity-50"
+            className="p-3 rounded-xl bg-blue-600 text-white hover:bg-blue-700 transition disabled:opacity-50"
           >
             <Send className="w-4 h-4" />
           </button>
-        </form>
-      </div>
+        </div>
+      </form>
     </div>
   );
 }
