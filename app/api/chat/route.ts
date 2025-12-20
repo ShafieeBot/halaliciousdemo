@@ -5,48 +5,44 @@ export const runtime = "nodejs";
 
 const TOGETHER_MODEL = "meta-llama/Llama-3.2-3B-Instruct-Turbo";
 
-// Single prompt: Extract filter and generate a friendly message
 const SYSTEM_PROMPT = `
 You are a friendly assistant helping Muslims find halal food in Japan.
 
 Your job is to:
-1. Extract search filters from the user's query
-2. Generate a short, friendly message
+1. Understand what the user is looking for
+2. Generate search terms that will find matching restaurants
+3. Write a short friendly message
 
-CRITICAL OUTPUT RULES:
-- Respond with ONLY valid JSON (no markdown, no commentary)
-- Your JSON MUST include:
-  - "filter": object with search parameters
-  - "message": a short friendly response
+OUTPUT FORMAT (JSON only, no markdown):
+{
+  "message": "Short friendly message",
+  "search_terms": ["term1", "term2", "term3"],
+  "price_level": null or "$" or "$$" or "$$$"
+}
 
-FILTER KEYS (use null if not mentioned):
-- cuisine_subtype: specific dish (ramen, sushi, kebab, curry, udon, biryani, etc.)
-- cuisine_category: broad cuisine type - ALWAYS set this when food is mentioned:
-  * ramen, sushi, udon, soba, tempura, donburi, yakiniku, yakitori → "Japanese"
-  * biryani, tandoori, naan, curry (Indian style) → "Indian"  
-  * kebab, doner, shawarma → "Turkish"
-  * nasi goreng, satay, rendang → "Indonesian"
-  * tom yum, pad thai → "Thai"
-  * burger, pizza, pasta → "Western"
-- keyword: location (Shinjuku, Shibuya, Asakusa, Tokyo, Akihabara, Ueno, etc.)
-- price_level: "cheap", "moderate", or "expensive"
-- tag: attributes like "spicy", "vegan", "family-friendly"
-- favorites: true only if user asks about their saved/favorite places
-
-MESSAGE GUIDELINES:
-- Keep it short and friendly
-- Don't list specific restaurant names (the map will show them)
-- Example: "Here are some Japanese halal options in Shinjuku!"
+SEARCH TERMS RULES:
+- Include the specific food type: "ramen", "sushi", "kebab", "curry", "biryani", "wagyu", etc.
+- Include location if mentioned: "shinjuku", "shibuya", "asakusa", "ginza", "tokyo"
+- Include related terms that might appear in restaurant names or addresses
+- Be generous - include variations and related words
+- Terms are searched across: name, address, city, cuisine_category, cuisine_subtype
 
 EXAMPLES:
+
 User: "ramen in Shinjuku"
-{"filter":{"cuisine_subtype":"ramen","cuisine_category":"Japanese","keyword":"Shinjuku","price_level":null,"tag":null,"favorites":null},"message":"Looking for halal ramen in Shinjuku! Here's what I found:"}
+{"message":"Here are halal ramen spots in Shinjuku!","search_terms":["ramen","shinjuku"],"price_level":null}
 
-User: "cheap Indian food"  
-{"filter":{"cuisine_subtype":null,"cuisine_category":"Indian","keyword":null,"price_level":"cheap","tag":null,"favorites":null},"message":"Here are some affordable halal Indian restaurants!"}
+User: "cheap Indian food"
+{"message":"Here are budget-friendly Indian options!","search_terms":["indian","curry","biryani","tandoori"],"price_level":"$"}
 
-User: "show my favorites"
-{"filter":{"cuisine_subtype":null,"cuisine_category":null,"keyword":null,"price_level":null,"tag":null,"favorites":true},"message":"Here are your saved favorites!"}
+User: "best yakiniku"
+{"message":"Here are great halal yakiniku places!","search_terms":["yakiniku","wagyu","beef","bbq","japanese"],"price_level":null}
+
+User: "halal sushi near Tokyo Station"
+{"message":"Halal sushi near Tokyo Station!","search_terms":["sushi","tokyo station","japanese"],"price_level":null}
+
+User: "something spicy"
+{"message":"Here are some spicy options!","search_terms":["spicy","indian","thai","curry","hot"],"price_level":null}
 
 Return JSON ONLY.
 `;
@@ -76,15 +72,10 @@ export async function POST(req: Request) {
     }
 
     const userMessages = body.messages as { role: "user" | "assistant"; content: string }[];
-    const context = body.context || {};
-    const lastFilter = context.lastFilter || {};
 
     // Build messages for LLM
     const messagesForLLM = [
       { role: "system", content: SYSTEM_PROMPT },
-      ...(Object.keys(lastFilter).length > 0 
-        ? [{ role: "system", content: `Previous filter context: ${JSON.stringify(lastFilter)}` }] 
-        : []),
       ...userMessages,
     ];
 
@@ -98,8 +89,9 @@ export async function POST(req: Request) {
       body: JSON.stringify({
         model: TOGETHER_MODEL,
         messages: messagesForLLM,
-        temperature: 0.2,
+        temperature: 0.3,
         response_format: { type: "json_object" },
+        max_tokens: 500,
       }),
     });
 
@@ -117,32 +109,16 @@ export async function POST(req: Request) {
 
     if (!parsed || typeof parsed !== "object") {
       return NextResponse.json({
-        filter: {},
-        message: "I didn't understand that. Could you try again?",
+        message: "Here's what I found!",
+        search_terms: [],
+        price_level: null,
       });
     }
 
-    // Normalize filter
-    const filter = parsed.filter || {};
-    const normalizedFilter = {
-      cuisine_subtype: filter.cuisine_subtype ?? null,
-      cuisine_category: filter.cuisine_category ?? null,
-      price_level: filter.price_level ?? null,
-      tag: filter.tag ?? null,
-      keyword: filter.keyword ?? null,
-      favorites: typeof filter.favorites === "boolean" ? filter.favorites : null,
-    };
-
-    const message = typeof parsed.message === "string" && parsed.message.trim()
-      ? parsed.message
-      : "Here's what I found!";
-
-    // Return filter and message - NO places array
-    // The map-wrapper will query /api/places/search with this filter
-    // and the chat component will display the places from the map's state
     return NextResponse.json({
-      filter: normalizedFilter,
-      message,
+      message: parsed.message || "Here's what I found!",
+      search_terms: Array.isArray(parsed.search_terms) ? parsed.search_terms : [],
+      price_level: parsed.price_level || null,
     });
 
   } catch (e: any) {
