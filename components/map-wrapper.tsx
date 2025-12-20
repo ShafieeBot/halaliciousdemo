@@ -21,30 +21,26 @@ export default function MapWrapper({ initialPlaces }: MapWrapperProps) {
   const [showFavorites, setShowFavorites] = useState(false);
 
   /**
-   * ✅ DB-driven filtering:
-   * - chat returns a "filter" object (variables)
-   * - we POST it to /api/places/search
-   * - setPlaces() to exact DB results
-   * - NO client-side filtering of initialPlaces
+   * ✅ AI-driven filtering:
+   * - AI returns search_terms for loose matching
+   * - We POST to /api/places/search to query DB
    */
   const handleFilter = async (filter: any) => {
-    // If filter is empty or all null/empty => reset
-    const hasActiveFilter =
-      filter && Object.values(filter).some((v) => v !== null && v !== undefined && v !== '');
-
-    if (!hasActiveFilter) {
+    // If filter is empty => reset to all places
+    if (!filter || Object.keys(filter).length === 0) {
       setPlaces(initialPlaces);
       return;
     }
 
-    // Favorites: stays client-side (localStorage), same as your previous behavior
-    if (filter?.favorites) {
+    // Favorites: client-side (localStorage)
+    if (filter.favorites) {
       const favorites = JSON.parse(localStorage.getItem('halal_favorites') || '[]');
       const favPlaces = initialPlaces.filter((p) => favorites.includes(p.id));
       setPlaces(favPlaces);
       return;
     }
 
+    // Query DB with AI-generated filter
     try {
       const res = await fetch('/api/places/search', {
         method: 'POST',
@@ -62,7 +58,7 @@ export default function MapWrapper({ initialPlaces }: MapWrapperProps) {
       const newPlaces: Place[] = Array.isArray(data?.places) ? data.places : [];
       setPlaces(newPlaces);
 
-      // If current selected place is no longer in results, close sidebar
+      // Close sidebar if selected place is no longer visible
       if (selectedPlace && !newPlaces.some((p) => p.id === selectedPlace.id)) {
         setSelectedPlace(null);
       }
