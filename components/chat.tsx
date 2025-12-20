@@ -9,15 +9,19 @@ interface ChatInterfaceProps {
   onSelectPlace: (placeName: string) => void;
 }
 
+type PlaceListItem = { name: string; cuisine: string };
+
+type ChatMsg = { role: 'user' | 'assistant'; content: string; places?: PlaceListItem[] };
+
 export default function ChatInterface({ places, onFilterChange, onSelectPlace }: ChatInterfaceProps) {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [messages, setMessages] = useState<
-    { role: 'user' | 'assistant'; content: string; places?: { name: string; cuisine: string }[] }[]
-  >([]);
+  const [messages, setMessages] = useState<ChatMsg[]>([]);
+  const [lastFilter, setLastFilter] = useState<any>({}); // ✅ context memory for follow-ups
 
   const handleClear = () => {
     setMessages([]);
+    setLastFilter({});
     onFilterChange({}); // Reset map filters
   };
 
@@ -28,6 +32,7 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: messageMessages.map((m) => ({ role: m.role, content: m.content })), // cleanse places from history
+          context: { lastFilter }, // ✅ send last known filter
         }),
       });
 
@@ -62,7 +67,7 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
         throw new Error(data?.error || `Failed to connect to AI service. (${response.status})`);
       }
 
-      // Your API returns: { role: 'assistant', content: '...string...' }
+      // Your API returns: { role: 'assistant', content: '...JSON STRING...' }
       const content: string = typeof data?.content === 'string' ? data.content : '';
 
       if (!content.trim()) {
@@ -74,7 +79,7 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
         return;
       }
 
-      // Parse JSON from AI
+      // Parse JSON from AI content
       let parsed: any;
       try {
         parsed = JSON.parse(content);
@@ -87,7 +92,6 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
         return;
       }
 
-      // Ensure expected shape
       parsed.filter = parsed.filter || {};
       parsed.message = typeof parsed.message === 'string' ? parsed.message : "Okay, I've updated the map.";
 
@@ -111,8 +115,10 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
         }
       }
 
+      // ✅ Apply and store filter for follow-ups
       if (parsed.filter) {
         onFilterChange(parsed.filter);
+        setLastFilter(parsed.filter);
       }
 
       setMessages((prev) => [
@@ -204,7 +210,6 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
               {m.content}
             </div>
 
-            {/* Render Places List if available */}
             {m.places && m.places.length > 0 && (
               <div className="mt-2 w-[85%]">
                 <ul className="space-y-1">
