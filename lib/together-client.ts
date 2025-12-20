@@ -33,18 +33,21 @@ Response Format:
 `;
 
 export async function chatWithApriel(messages: ChatCompletionMessageParam[]) {
+  // Sanitize messages to ensure content is always a string
+  // Use type assertion to satisfy Together AI's strict typing
+  const sanitizedMessages = messages.map((m) => ({
+    ...m,
+    content: m.content ?? "",
+  })) as ChatCompletionMessageParam[];
+
   const response = await together.chat.completions.create({
     model: "ServiceNow-AI/Apriel-1.6-15b-Thinker",
     messages: [
       {
-        role: "system",
+        role: "system" as const,
         content: SYSTEM_PROMPT,
       },
-      // FIX: Map inline to ensure content is always a string (Together AI types require this)
-      ...messages.map((m) => ({
-        ...m,
-        content: (m.content ?? "") as string,
-      })),
+      ...sanitizedMessages,
     ],
     max_tokens: 1024,
     temperature: 0.7,
