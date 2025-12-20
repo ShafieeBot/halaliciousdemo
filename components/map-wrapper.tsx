@@ -21,76 +21,35 @@ export default function MapWrapper({ initialPlaces }: MapWrapperProps) {
     const [showFavorites, setShowFavorites] = useState(false);
 
     const handleFilter = (filter: any) => {
-        // If filter is empty or all null, show all places
-        const hasActiveFilter = filter && Object.values(filter).some(v => v !== null && v !== undefined && v !== '');
-        
-        if (!hasActiveFilter) {
-            setPlaces(initialPlaces);
-            return;
-        }
-
         let result = initialPlaces;
 
-        // Filter by cuisine_subtype
         if (filter.cuisine_subtype) {
-            result = result.filter(p => 
-                p.cuisine_subtype?.toLowerCase().includes(filter.cuisine_subtype.toLowerCase())
-            );
+            result = result.filter(p => p.cuisine_subtype?.toLowerCase().includes(filter.cuisine_subtype.toLowerCase()));
         }
-
-        // Filter by cuisine_category
         if (filter.cuisine_category) {
-            result = result.filter(p => 
-                p.cuisine_category?.toLowerCase().includes(filter.cuisine_category.toLowerCase())
-            );
+            result = result.filter(p => p.cuisine_category?.toLowerCase().includes(filter.cuisine_category.toLowerCase()));
         }
-
-        // Filter by price_level
         if (filter.price_level) {
-            const priceMap: Record<string, number> = {
-                'Budget': 1,
-                '$': 1,
-                'Mid-range': 2,
-                '$$': 2,
-                'Fine Dining': 3,
-                '$$$': 3,
-                '$$$$': 4
-            };
-            const targetLevel = priceMap[filter.price_level] || 2;
-            result = result.filter(p => {
-                if (!p.price_level) return targetLevel <= 2; // Include unknown as budget-friendly
-                const placeLevel = priceMap[p.price_level] || 2;
-                return placeLevel <= targetLevel;
-            });
+            result = result.filter(p => p.price_level && p.price_level.length <= filter.price_level.length);
         }
-
-        // Filter by tag
         if (filter.tag) {
-            result = result.filter(p => 
-                p.tags && p.tags.some(t => t.toLowerCase().includes(filter.tag.toLowerCase()))
-            );
+            result = result.filter(p => p.tags && p.tags.some(t => t.toLowerCase().includes(filter.tag.toLowerCase())));
         }
-
-        // Filter by favorites
         if (filter.favorites) {
             const favorites = JSON.parse(localStorage.getItem('halal_favorites') || '[]');
             result = result.filter(p => favorites.includes(p.id));
         }
 
-        // Filter by keyword (search in name, cuisine, tags, address, AND city)
         if (filter.keyword) {
             const k = filter.keyword.toLowerCase();
             result = result.filter(p =>
                 p.name.toLowerCase().includes(k) ||
                 p.cuisine_subtype?.toLowerCase().includes(k) ||
-                p.cuisine_category?.toLowerCase().includes(k) ||
-                p.city?.toLowerCase().includes(k) ||  // ✅ Added city search
-                p.address?.toLowerCase().includes(k) ||
-                (p.tags && p.tags.some(t => t.toLowerCase().includes(k)))
+                (p.cuisine_category && p.cuisine_category.toLowerCase().includes(k)) ||
+                (p.tags && p.tags.some(t => t.toLowerCase().includes(k))) ||
+                (p.address && p.address.toLowerCase().includes(k))
             );
         }
-
-        console.log(`Filter applied:`, filter, `→ ${result.length} places`);
         setPlaces(result);
     };
 
