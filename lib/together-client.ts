@@ -6,48 +6,46 @@ const together = new Together({
 });
 
 /**
- * OPTION 1 (Thinking model) strategy:
- * - Use the thinker model for best reasoning/tool use
- * - BUT: never trust its raw text output for the UI
- * - API route will extract JSON / wrap as needed
- *
- * Still: we add strong instructions to reduce chain-of-thought leakage.
+ * Using Meta Llama 3.2 3B Instruct Turbo
+ * - $0.06 per million tokens (very cheap!)
+ * - Fast responses
+ * - Good at following JSON instructions
+ * - No "thinking" leakage
  */
-const SYSTEM_PROMPT = `
-You are a friendly, knowledgeable local guide helping Muslims find halal food in Tokyo.
+const SYSTEM_PROMPT = `You are a halal restaurant guide for Japan. Help users find halal food.
 
-You have access to a database of halal restaurants via the 'queryDatabase' tool.
+You have a "queryDatabase" tool to search restaurants. USE IT when users ask about food/restaurants.
 
-TOOL USE RULE:
-- If the user asks a question that requires knowing specific restaurant data (e.g. "How many ramen places?", "Recommend a place", "Any others?", "Show me..."), YOU MUST USE THE TOOL.
-- Do not guess or hallucinate specific restaurant names.
-- If the user follows up (e.g. "any others?"), infer context from the conversation and use the tool accordingly.
+RESPOND ONLY WITH A JSON OBJECT. No other text.
 
-CRITICAL OUTPUT RULE (MUST FOLLOW):
-- Do NOT include reasoning, analysis, planning, or meta-commentary.
-- Do NOT explain what you are doing.
-- Output ONLY the final JSON object. No extra text before or after.
-- Any text outside JSON will be discarded.
-
-CRITICAL: After using the 'queryDatabase' tool, your final response MUST still be a JSON object with 'filter' and 'message'.
-- If the user asked to "show" or "find" places, YOU MUST update the 'filter' object so the map updates.
-- Example: if ramen places => set "filter": { "cuisine_subtype": "Ramen" }.
-- If recommending a SPECIFIC place => set "filter": { "keyword": "Fortune Tree" }.
-- If user specifies a LOCATION (e.g. "Ramen in Asakusa") => set "filter": { "cuisine_subtype": "Ramen", "keyword": "Asakusa" }.
-
-Response Format:
+JSON FORMAT:
 {
   "filter": {
-    "cuisine_subtype": string | null,
-    "cuisine_category": string | null,
-    "price_level": string | null,
-    "tag": string | null,
-    "keyword": string | null,
-    "favorites": boolean | null
+    "cuisine_subtype": "Ramen" | "Sushi" | "Indian" | null,
+    "cuisine_category": "Japanese" | "Asian" | null,
+    "price_level": "Budget" | "Mid-range" | "Fine Dining" | null,
+    "keyword": "location" | null,
+    "favorites": null
   },
-  "message": string
+  "message": "Your friendly response to the user"
 }
-`;
+
+FILTER RULES:
+- User says "sushi" → set cuisine_subtype: "Sushi"
+- User says "ramen" → set cuisine_subtype: "Ramen"
+- User says "Shinjuku" or location → set keyword: "Shinjuku"
+- User says "cheap/budget" → set price_level: "Budget"
+- Always set relevant filter fields!
+
+EXAMPLES:
+User: "sushi"
+{"filter":{"cuisine_subtype":"Sushi","cuisine_category":null,"price_level":null,"keyword":null,"favorites":null},"message":"Here are halal sushi restaurants! 🍣"}
+
+User: "ramen in Shinjuku"
+{"filter":{"cuisine_subtype":"Ramen","cuisine_category":null,"price_level":null,"keyword":"Shinjuku","favorites":null},"message":"Found halal ramen in Shinjuku! 🍜"}
+
+User: "cheap lunch"
+{"filter":{"cuisine_subtype":null,"cuisine_category":null,"price_level":"Budget","keyword":null,"favorites":null},"message":"Here are budget-friendly halal spots! 💰"}`;
 
 export type Message =
   | { role: "user" | "assistant" | "system"; content?: unknown; name?: string }
@@ -89,12 +87,12 @@ export async function chatWithApriel(messages: Message[]) {
   ];
 
   const response = await together.chat.completions.create({
-    model: "ServiceNow-AI/Apriel-1.6-15b-Thinker",
+    model: "meta-llama/Llama-3.2-3B-Instruct-Turbo",
     messages: payloadMessages as any,
-    max_tokens: 900,
-    temperature: 0.4,
+    max_tokens: 512,
+    temperature: 0.3, // Low for consistent JSON output
 
-    // JSON Mode (not fully reliable for thinker models, but helps)
+    // JSON Mode
     response_format: { type: "json_object" },
 
     // Tool calling
@@ -103,25 +101,22 @@ export async function chatWithApriel(messages: Message[]) {
         type: "function",
         function: {
           name: "queryDatabase",
-          description:
-            "Query the halal restaurant database to count or find specific places.",
+          description: "Search the halal restaurant database.",
           parameters: {
             type: "object",
             properties: {
               queryType: {
                 type: "string",
                 enum: ["count", "list"],
-                description:
-                  "Whether to count matches or list specific restaurant names.",
+                description: "Use 'list' to get names, 'count' for totals.",
               },
               cuisine: {
                 type: "string",
-                description: "Cuisine to filter by (e.g. Ramen, Sushi, Indian)",
+                description: "Cuisine type: Ramen, Sushi, Indian, Turkish, etc.",
               },
               keyword: {
                 type: "string",
-                description:
-                  "General keyword to search in name, address, or city (e.g. Shibuya, Shinjuku, Spicy)",
+                description: "Location: Shinjuku, Shibuya, Tokyo, Osaka, etc.",
               },
             },
             required: ["queryType"],
