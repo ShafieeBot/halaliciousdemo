@@ -178,24 +178,31 @@ export async function POST(req: Request) {
         }
 
         // 3) Second call with tool output
-        const secondCallMessages = [
-          ...typedMessages,
-          { role: "assistant" as const, content: normalizeContent(message.content) },
-          { role: "tool" as const, tool_call_id: toolCall.id, content: toolResult },
-        ];
+const secondCallMessages = [
+  ...typedMessages,
+  {
+    role: "tool" as const,
+    tool_call_id: toolCall.id,
+    content: toolResult,
+  },
+];
 
-        const finalCompletion = await chatWithApriel(secondCallMessages);
-        const finalChoice = finalCompletion.choices?.[0];
+const finalCompletion = await chatWithApriel(secondCallMessages);
+const finalChoice = finalCompletion.choices?.[0];
 
-        if (!finalChoice?.message) {
-          return NextResponse.json(
-            {
-              role: "assistant",
-              content: JSON.stringify({ filter: emptyFilter(), message: "No response from AI." }),
-            },
-            { status: 500 }
-          );
-        }
+if (!finalChoice?.message) {
+  return NextResponse.json(
+    {
+      role: "assistant",
+      content: JSON.stringify({
+        filter: emptyFilter(),
+        message: "No response from AI.",
+      }),
+    },
+    { status: 500 }
+  );
+}
+
 
         // 4) Coerce AI output to strict schema (strips thoughts)
         const coerced = coerceToAppJson(finalChoice.message.content ?? "");
