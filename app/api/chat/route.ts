@@ -7,6 +7,11 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+const GOOGLE_MAPS_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY!;
+
+// Default search radius in km
+const DEFAULT_RADIUS_KM = 5;
+
 function normalizeContent(content: unknown): string {
   if (typeof content === "string") return content;
   if (content == null) return "";
@@ -24,6 +29,7 @@ type FilterShape = {
   tag: string | null;
   keyword: string | null;
   favorites: boolean | null;
+  location?: { lat: number; lng: number; radius: number; name: string } | null;
 };
 
 function emptyFilter(): FilterShape {
@@ -34,7 +40,51 @@ function emptyFilter(): FilterShape {
     tag: null,
     keyword: null,
     favorites: null,
+    location: null,
   };
+}
+
+/**
+ * Geocode a location name using Google Geocoding API
+ * Returns coordinates or null if not found
+ */
+async function geocodeLocation(locationName: string): Promise<{ lat: number; lng: number; formattedName: string } | null> {
+  try {
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(locationName)}&key=${GOOGLE_MAPS_API_KEY}`;
+    
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (data.status === "OK" && data.results && data.results.length > 0) {
+      const result = data.results[0];
+      return {
+        lat: result.geometry.location.lat,
+        lng: result.geometry.location.lng,
+        formattedName: result.formatted_address,
+      };
+    }
+
+    console.log(`Geocoding failed for "${locationName}":`, data.status);
+    return null;
+  } catch (error) {
+    console.error("Geocoding error:", error);
+    return null;
+  }
+}
+
+/**
+ * Calculate distance between two points using Haversine formula
+ */
+function getDistanceKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371; // Earth's radius in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
 }
 
 /**
@@ -51,7 +101,6 @@ function extractJsonFromResponse(text: string): Record<string, unknown> | null {
     // continue
   }
 
-  // Find JSON objects
   const jsonObjects: Record<string, unknown>[] = [];
   let i = 0;
 
@@ -95,9 +144,37 @@ function extractJsonFromResponse(text: string): Record<string, unknown> | null {
 }
 
 /**
+ * Extract location keywords from user message
+ * Looks for patterns like "in X", "near X", "around X", "at X"
+ */
+function extractLocationFromMessage(message: string): string | null {
+  const msg = message.toLowerCase();
+  
+  // Patterns to find location
+  const patterns = [
+    /(?:in|near|around|at|close to|nearby)\s+([a-zA-Z\s]+?)(?:\s*[,.\?!]|$)/i,
+    /([a-zA-Z\s]+?)\s+(?:area|district|station|city|town)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = message.match(pattern);
+    if (match && match[1]) {
+      const location = match[1].trim();
+      // Filter out common non-location words
+      const nonLocations = ["the", "a", "an", "some", "any", "good", "best", "great", "nice", "cheap", "expensive"];
+      if (location.length > 2 && !nonLocations.includes(location.toLowerCase())) {
+        return location;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
  * Infer filter from user's message
  */
-function inferFilterFromMessage(userMessage: string): Partial<FilterShape> {
+function inferFilterFromMessage(userMessage: string): { filter: Partial<FilterShape>; locationKeyword: string | null } {
   const msg = userMessage.toLowerCase();
   const filter: Partial<FilterShape> = {};
 
@@ -127,7 +204,7 @@ function inferFilterFromMessage(userMessage: string): Partial<FilterShape> {
     ["pizza", "Pizza"],
     ["chicken", "Chicken"],
     ["seafood", "Seafood"],
-    ["spicy", "Spicy"], // Added spicy
+    ["halal", "Halal"],
   ];
 
   for (const [key, value] of cuisineMap) {
@@ -137,51 +214,19 @@ function inferFilterFromMessage(userMessage: string): Partial<FilterShape> {
     }
   }
 
-  // Locations
-  const locations = [
-    "shinjuku", "shibuya", "tokyo", "osaka", "kyoto", "asakusa",
-    "ginza", "akihabara", "harajuku", "ikebukuro", "ueno", "roppongi",
-    "shinagawa", "ebisu", "meguro", "nakano", "kichijoji", "yokohama",
-    "kobe", "nara", "hiroshima", "fukuoka", "sapporo", "nagoya",
-  ];
-
-  for (const loc of locations) {
-    if (msg.includes(loc)) {
-      filter.keyword = loc.charAt(0).toUpperCase() + loc.slice(1);
-      break;
-    }
-  }
-
   // Price level
   if (msg.includes("cheap") || msg.includes("budget") || msg.includes("affordable")) {
     filter.price_level = "Budget";
   }
 
-  return filter;
+  // Extract location keyword (to be geocoded)
+  const locationKeyword = extractLocationFromMessage(userMessage);
+
+  return { filter, locationKeyword };
 }
 
 /**
- * Extract context from conversation history (for follow-up questions)
- */
-function getConversationContext(messages: Array<{ role: string; content: string }>): Partial<FilterShape> {
-  const context: Partial<FilterShape> = {};
-
-  // Look through previous messages to find context
-  for (const msg of messages) {
-    if (msg.role === "user") {
-      const inferred = inferFilterFromMessage(msg.content);
-      // Keep accumulating context
-      if (inferred.cuisine_subtype) context.cuisine_subtype = inferred.cuisine_subtype;
-      if (inferred.keyword) context.keyword = inferred.keyword;
-      if (inferred.price_level) context.price_level = inferred.price_level;
-    }
-  }
-
-  return context;
-}
-
-/**
- * Check if this is a follow-up question
+ * Check if follow-up question
  */
 function isFollowUpQuestion(userMessage: string): boolean {
   const msg = userMessage.toLowerCase();
@@ -191,6 +236,25 @@ function isFollowUpQuestion(userMessage: string): boolean {
     "more", "another", "else", "different", "other",
   ];
   return followUpPatterns.some((p) => msg.includes(p));
+}
+
+/**
+ * Get context from conversation history
+ */
+function getConversationContext(messages: Array<{ role: string; content: string }>): { filter: Partial<FilterShape>; locationKeyword: string | null } {
+  const context: Partial<FilterShape> = {};
+  let locationKeyword: string | null = null;
+
+  for (const msg of messages) {
+    if (msg.role === "user") {
+      const { filter: inferred, locationKeyword: loc } = inferFilterFromMessage(msg.content);
+      if (inferred.cuisine_subtype) context.cuisine_subtype = inferred.cuisine_subtype;
+      if (inferred.price_level) context.price_level = inferred.price_level;
+      if (loc) locationKeyword = loc;
+    }
+  }
+
+  return { filter: context, locationKeyword };
 }
 
 /**
@@ -213,17 +277,17 @@ function generateMessage(filter: FilterShape, placesCount?: number, isNoResults?
   if (isNoResults) {
     const parts: string[] = [];
     if (filter.cuisine_subtype) parts.push(filter.cuisine_subtype.toLowerCase());
-    if (filter.keyword) parts.push(`in ${filter.keyword}`);
+    if (filter.location?.name) parts.push(`near ${filter.location.name}`);
     
     if (parts.length > 0) {
-      return `No halal ${parts.join(" ")} found. Please try different filters.`;
+      return `No halal ${parts.join(" ")} found. Try a different search or larger area!`;
     }
-    return "No restaurants found. Please try different filters.";
+    return "No restaurants found. Try a different search!";
   }
 
   const parts: string[] = [];
   if (filter.cuisine_subtype) parts.push(filter.cuisine_subtype.toLowerCase());
-  if (filter.keyword) parts.push(`in ${filter.keyword}`);
+  if (filter.location?.name) parts.push(`near ${filter.location.name}`);
 
   const countText = placesCount !== undefined ? `Found ${placesCount}` : "Here are";
 
@@ -237,39 +301,31 @@ function generateMessage(filter: FilterShape, placesCount?: number, isNoResults?
 }
 
 /**
- * Build response combining model output with inferred/context filters
+ * Build response
  */
 function buildResponse(
   parsed: Record<string, unknown> | null,
   currentFilter: Partial<FilterShape>,
   places?: Array<Record<string, unknown>>
 ): { filter: FilterShape; message: string; places?: Array<{ name: string; cuisine: string }> } {
-  let filter = emptyFilter();
+  let filter: FilterShape = {
+    cuisine_subtype: currentFilter.cuisine_subtype || null,
+    cuisine_category: currentFilter.cuisine_category || null,
+    price_level: currentFilter.price_level || null,
+    tag: null,
+    keyword: currentFilter.location?.name || currentFilter.keyword || null,
+    favorites: null,
+    location: currentFilter.location || null,
+  };
+
   let message = "";
 
   if (parsed && typeof parsed === "object") {
-    if (parsed.filter && typeof parsed.filter === "object") {
-      const pf = parsed.filter as Record<string, unknown>;
-      filter = {
-        cuisine_subtype: (typeof pf.cuisine_subtype === "string" ? pf.cuisine_subtype : null) || currentFilter.cuisine_subtype || null,
-        cuisine_category: (typeof pf.cuisine_category === "string" ? pf.cuisine_category : null) || currentFilter.cuisine_category || null,
-        price_level: (typeof pf.price_level === "string" ? pf.price_level : null) || currentFilter.price_level || null,
-        tag: (typeof pf.tag === "string" ? pf.tag : null) || null,
-        keyword: (typeof pf.keyword === "string" ? pf.keyword : null) || currentFilter.keyword || null,
-        favorites: typeof pf.favorites === "boolean" ? pf.favorites : null,
-      };
-    } else {
-      filter = { ...emptyFilter(), ...currentFilter };
-    }
-
     if (typeof parsed.message === "string" && parsed.message.length > 0 && !isThinkingText(parsed.message)) {
       message = parsed.message;
     }
-  } else {
-    filter = { ...emptyFilter(), ...currentFilter };
   }
 
-  // Generate message if needed
   if (!message || isThinkingText(message)) {
     message = generateMessage(filter, places?.length, places?.length === 0);
   }
@@ -292,34 +348,53 @@ function buildResponse(
 }
 
 /**
- * Query database with filters
+ * Query database with GEOSPATIAL filtering using dynamic geocoding
  */
-async function queryPlaces(cuisine?: string | null, keyword?: string | null, tag?: string | null) {
+async function queryPlaces(
+  cuisine?: string | null,
+  location?: { lat: number; lng: number; radius: number } | null
+) {
   let query = supabase
     .from("places")
-    .select("id, name, cuisine_subtype, cuisine_category, city, address, price_level, rating");
+    .select("id, name, cuisine_subtype, cuisine_category, city, address, price_level, rating, lat, lng");
 
+  // Filter by cuisine in database
   if (cuisine) {
-    // Search in both cuisine_subtype and tags
-    query = query.or(`cuisine_subtype.ilike.%${cuisine}%,tags.cs.{${cuisine.toLowerCase()}}`);
-  }
-  if (keyword) {
-    query = query.or(
-      `name.ilike.%${keyword}%,address.ilike.%${keyword}%,city.ilike.%${keyword}%`
-    );
-  }
-  if (tag) {
-    query = query.contains("tags", [tag.toLowerCase()]);
+    query = query.or(`cuisine_subtype.ilike.%${cuisine}%,cuisine_category.ilike.%${cuisine}%`);
   }
 
-  const { data, error } = await query.order("rating", { ascending: false, nullsFirst: false }).limit(20);
+  const { data, error } = await query
+    .not("lat", "is", null)
+    .not("lng", "is", null)
+    .order("rating", { ascending: false, nullsFirst: false })
+    .limit(500); // Get more for geospatial filtering
 
   if (error) {
     console.error("DB Error:", error);
     return [];
   }
 
-  return data || [];
+  let results = data || [];
+
+  // GEOSPATIAL FILTER: Filter by distance from location
+  if (location && results.length > 0) {
+    const { lat, lng, radius } = location;
+
+    results = results.filter((place) => {
+      if (!place.lat || !place.lng) return false;
+      const distance = getDistanceKm(lat, lng, place.lat, place.lng);
+      return distance <= radius;
+    });
+
+    // Sort by distance (nearest first)
+    results.sort((a, b) => {
+      const distA = getDistanceKm(lat, lng, a.lat!, a.lng!);
+      const distB = getDistanceKm(lat, lng, b.lat!, b.lng!);
+      return distA - distB;
+    });
+  }
+
+  return results.slice(0, 20);
 }
 
 export async function POST(req: Request) {
@@ -331,36 +406,52 @@ export async function POST(req: Request) {
         role: "assistant",
         content: JSON.stringify({
           filter: emptyFilter(),
-          message: "Assalamualaikum! 👋 Ask me about halal food in Japan!",
+          message: "Assalamualaikum! 👋 Ask me about halal food anywhere in the world!",
           places: [],
         }),
       });
     }
 
-    // Normalize messages
     const typedMessages = messages.map((msg: Record<string, unknown>) => ({
       role: String(msg.role || "user"),
       content: normalizeContent(msg.content),
     }));
 
-    // Get last user message
     const lastUserMessage = [...typedMessages].reverse().find((m) => m.role === "user");
     const userMessageText = lastUserMessage?.content || "";
 
-    // Get current filter from user message
-    const currentInferred = inferFilterFromMessage(userMessageText);
+    // Infer filter and extract location keyword
+    const { filter: currentInferred, locationKeyword } = inferFilterFromMessage(userMessageText);
 
-    // If follow-up question, also get context from conversation history
-    let currentFilter = { ...currentInferred };
+    let currentFilter: Partial<FilterShape> = { ...currentInferred };
+    let currentLocationKeyword = locationKeyword;
+
+    // Handle follow-up questions
     if (isFollowUpQuestion(userMessageText)) {
-      const contextFilter = getConversationContext(typedMessages);
-      // Merge: current message takes priority, but fill gaps from context
+      const { filter: contextFilter, locationKeyword: contextLoc } = getConversationContext(typedMessages);
       currentFilter = {
         cuisine_subtype: currentInferred.cuisine_subtype || contextFilter.cuisine_subtype,
         cuisine_category: currentInferred.cuisine_category || contextFilter.cuisine_category,
         price_level: currentInferred.price_level || contextFilter.price_level,
-        keyword: currentInferred.keyword || contextFilter.keyword,
       };
+      currentLocationKeyword = locationKeyword || contextLoc;
+    }
+
+    // GEOCODE the location if we have a keyword
+    if (currentLocationKeyword) {
+      const geocoded = await geocodeLocation(currentLocationKeyword);
+      if (geocoded) {
+        currentFilter.location = {
+          lat: geocoded.lat,
+          lng: geocoded.lng,
+          radius: DEFAULT_RADIUS_KM,
+          name: currentLocationKeyword,
+        };
+        currentFilter.keyword = currentLocationKeyword;
+        console.log(`Geocoded "${currentLocationKeyword}" → ${geocoded.lat}, ${geocoded.lng}`);
+      } else {
+        console.log(`Could not geocode "${currentLocationKeyword}"`);
+      }
     }
 
     // 1) Call AI
@@ -368,8 +459,7 @@ export async function POST(req: Request) {
     const choice = completion.choices?.[0];
 
     if (!choice?.message) {
-      // No AI response - query DB with inferred filter
-      const places = await queryPlaces(currentFilter.cuisine_subtype, currentFilter.keyword);
+      const places = await queryPlaces(currentFilter.cuisine_subtype, currentFilter.location);
       const response = buildResponse(null, currentFilter, places);
       return NextResponse.json({
         role: "assistant",
@@ -386,13 +476,24 @@ export async function POST(req: Request) {
       if (toolCall.function?.name === "queryDatabase") {
         const args = JSON.parse(toolCall.function.arguments ?? "{}");
 
-        // Combine tool args with inferred filter
         const cuisine = args.cuisine || currentFilter.cuisine_subtype;
-        const keyword = args.keyword || currentFilter.keyword;
 
-        const places = await queryPlaces(cuisine, keyword);
+        // If AI provided a location keyword, geocode it
+        let location = currentFilter.location;
+        if (args.keyword && !location) {
+          const geocoded = await geocodeLocation(args.keyword);
+          if (geocoded) {
+            location = {
+              lat: geocoded.lat,
+              lng: geocoded.lng,
+              radius: DEFAULT_RADIUS_KM,
+              name: args.keyword,
+            };
+          }
+        }
 
-        // Build tool result
+        const places = await queryPlaces(cuisine, location);
+
         let toolResult = "";
         if (places.length === 0) {
           toolResult = "No restaurants found matching the criteria.";
@@ -401,7 +502,6 @@ export async function POST(req: Request) {
           toolResult = `Found ${places.length} restaurants: ${names}`;
         }
 
-        // Second call with tool result
         const secondCallMessages = [
           ...typedMessages,
           {
@@ -415,14 +515,13 @@ export async function POST(req: Request) {
         const finalChoice = finalCompletion.choices?.[0];
 
         const parsed = extractJsonFromResponse(finalChoice?.message?.content ?? "");
-        
-        // Update filter with what we actually queried
+
         const finalFilter = {
           ...currentFilter,
           cuisine_subtype: cuisine || currentFilter.cuisine_subtype,
-          keyword: keyword || currentFilter.keyword,
+          location: location,
         };
-        
+
         const response = buildResponse(parsed, finalFilter, places);
         return NextResponse.json({
           role: "assistant",
@@ -434,18 +533,14 @@ export async function POST(req: Request) {
     // 3) No tool call - direct response
     const parsed = extractJsonFromResponse(message.content ?? "");
 
-    // Get filter from parsed or inferred
     const parsedFilter = (parsed?.filter as Record<string, unknown>) || {};
     const cuisine = (typeof parsedFilter.cuisine_subtype === "string" ? parsedFilter.cuisine_subtype : null) || currentFilter.cuisine_subtype;
-    const keyword = (typeof parsedFilter.keyword === "string" ? parsedFilter.keyword : null) || currentFilter.keyword;
 
-    // Query database
-    const places = await queryPlaces(cuisine, keyword);
+    const places = await queryPlaces(cuisine, currentFilter.location);
 
     const finalFilter = {
       ...currentFilter,
       cuisine_subtype: cuisine,
-      keyword: keyword,
     };
 
     const response = buildResponse(parsed, finalFilter, places);
