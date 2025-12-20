@@ -38,145 +38,279 @@ function emptyFilter(): FilterShape {
 }
 
 /**
- * Extract the LAST valid JSON object containing "filter" and "message" from a string.
- * The Thinker model outputs reasoning first, then the final JSON answer.
- * We want the final answer, which is typically the last JSON object.
+ * Extract JSON from Apriel's response.
+ * The Thinker model outputs reasoning THEN JSON, so we find the LAST valid JSON object.
  */
-function extractFinalJsonObject(text: string): Record<string, unknown> | null {
+function extractJsonFromResponse(text: string): Record<string, unknown> | null {
   const s = (text ?? "").trim();
   if (!s) return null;
 
-  // If whole string is valid JSON, use it
+  // Try parsing whole string first (best case)
   try {
     const parsed = JSON.parse(s);
-    if (typeof parsed === "object" && parsed !== null) {
-      return parsed;
-    }
+    if (typeof parsed === "object" && parsed !== null) return parsed;
   } catch {
-    // continue to extraction
+    // continue
   }
 
-  // Find ALL JSON objects and return the last one that has "filter" or "message"
+  // Find all JSON objects in the string
   const jsonObjects: Record<string, unknown>[] = [];
-  let start = 0;
+  let i = 0;
 
-  while (start < s.length) {
-    const openBrace = s.indexOf("{", start);
-    if (openBrace === -1) break;
+  while (i < s.length) {
+    if (s[i] === "{") {
+      let depth = 0;
+      let start = i;
 
-    let depth = 0;
-    for (let i = openBrace; i < s.length; i++) {
-      const ch = s[i];
-      if (ch === "{") depth++;
-      else if (ch === "}") depth--;
+      for (let j = i; j < s.length; j++) {
+        if (s[j] === "{") depth++;
+        else if (s[j] === "}") depth--;
 
-      if (depth === 0) {
-        const candidate = s.slice(openBrace, i + 1);
-        try {
-          const parsed = JSON.parse(candidate);
-          if (typeof parsed === "object" && parsed !== null) {
-            jsonObjects.push(parsed);
+        if (depth === 0) {
+          const candidate = s.slice(start, j + 1);
+          try {
+            const parsed = JSON.parse(candidate);
+            if (typeof parsed === "object" && parsed !== null) {
+              jsonObjects.push(parsed);
+            }
+          } catch {
+            // Not valid JSON
           }
-        } catch {
-          // Not valid JSON, skip
+          i = j + 1;
+          break;
         }
-        start = i + 1;
-        break;
       }
-    }
 
-    // If we never found a closing brace, move on
-    if (depth !== 0) {
-      start = openBrace + 1;
+      if (depth !== 0) i++;
+    } else {
+      i++;
     }
   }
 
-  // Return the last JSON object that has "filter" or "message" key
-  // (this is most likely the final answer, not intermediate thinking)
-  for (let i = jsonObjects.length - 1; i >= 0; i--) {
-    const obj = jsonObjects[i];
+  // Return the LAST JSON object with "filter" or "message" (the final answer)
+  for (let idx = jsonObjects.length - 1; idx >= 0; idx--) {
+    const obj = jsonObjects[idx];
     if ("filter" in obj || "message" in obj) {
       return obj;
     }
   }
 
-  // If none have filter/message, return the last one anyway
-  if (jsonObjects.length > 0) {
-    return jsonObjects[jsonObjects.length - 1];
-  }
-
-  return null;
+  // Return last JSON object if any
+  return jsonObjects.length > 0 ? jsonObjects[jsonObjects.length - 1] : null;
 }
 
 /**
- * Check if text looks like model "thinking" rather than a user-facing response
+ * Infer filter from user's message as a RELIABLE BACKUP.
+ * This ensures the map filters correctly even if the model fails.
  */
-function looksLikeThinking(text: string): boolean {
-  const thinkingPatterns = [
-    /^The user says:/i,
-    /^The user wants/i,
-    /^They want/i,
-    /^We need to/i,
-    /^Let me /i,
-    /^I need to/i,
-    /^I should/i,
-    /^Since we cannot/i,
-    /^The tool/i,
-    /^So we can/i,
-    /queryType/i,
-    /filter by cuisine/i,
+function inferFilterFromMessage(userMessage: string): Partial<FilterShape> {
+  const msg = userMessage.toLowerCase();
+  const filter: Partial<FilterShape> = {};
+
+  // Cuisine types - order matters (more specific first)
+  const cuisineMap: [string, string][] = [
+    ["yakiniku", "Yakiniku"],
+    ["gyudon", "Gyudon"],
+    ["tempura", "Tempura"],
+    ["udon", "Udon"],
+    ["soba", "Soba"],
+    ["ramen", "Ramen"],
+    ["sushi", "Sushi"],
+    ["indian", "Indian"],
+    ["pakistani", "Pakistani"],
+    ["turkish", "Turkish"],
+    ["kebab", "Kebab"],
+    ["curry", "Curry"],
+    ["chinese", "Chinese"],
+    ["korean", "Korean"],
+    ["thai", "Thai"],
+    ["vietnamese", "Vietnamese"],
+    ["indonesian", "Indonesian"],
+    ["malaysian", "Malaysian"],
+    ["middle eastern", "Middle Eastern"],
+    ["mediterranean", "Mediterranean"],
+    ["burger", "Burger"],
+    ["pizza", "Pizza"],
+    ["chicken", "Chicken"],
+    ["seafood", "Seafood"],
+    ["vegetarian", "Vegetarian"],
+    ["vegan", "Vegan"],
   ];
 
-  return thinkingPatterns.some((pattern) => pattern.test(text.trim()));
+  for (const [key, value] of cuisineMap) {
+    if (msg.includes(key)) {
+      filter.cuisine_subtype = value;
+      break;
+    }
+  }
+
+  // Locations in Japan
+  const locations = [
+    "shinjuku", "shibuya", "tokyo", "osaka", "kyoto", "asakusa",
+    "ginza", "akihabara", "harajuku", "ikebukuro", "ueno", "roppongi",
+    "shinagawa", "ebisu", "meguro", "nakano", "kichijoji", "yokohama",
+    "kobe", "nara", "hiroshima", "fukuoka", "sapporo", "nagoya",
+    "sendai", "kanazawa", "okinawa",
+  ];
+
+  for (const loc of locations) {
+    if (msg.includes(loc)) {
+      filter.keyword = loc.charAt(0).toUpperCase() + loc.slice(1);
+      break;
+    }
+  }
+
+  // Price level
+  if (msg.includes("cheap") || msg.includes("budget") || msg.includes("affordable") || msg.includes("inexpensive")) {
+    filter.price_level = "Budget";
+  } else if (msg.includes("expensive") || msg.includes("fancy") || msg.includes("fine dining") || msg.includes("upscale")) {
+    filter.price_level = "Fine Dining";
+  } else if (msg.includes("mid-range") || msg.includes("moderate")) {
+    filter.price_level = "Mid-range";
+  }
+
+  return filter;
 }
 
 /**
- * Force the AI output into your strict schema:
- * { filter: {...}, message: string, places?: [...] }
+ * Check if text looks like model thinking/reasoning (not a user-facing message)
  */
-function coerceToAppJson(raw: string): {
-  filter: FilterShape;
-  message: string;
-  places?: Array<{ name: string; cuisine: string }>;
-} {
-  const parsed = extractFinalJsonObject(raw);
+function isThinkingText(text: string): boolean {
+  if (!text || text.length < 10) return false;
+  
+  const t = text.trim().toLowerCase();
+  
+  const thinkingIndicators = [
+    "the user says",
+    "the user wants",
+    "the user is asking",
+    "they want",
+    "we need to",
+    "i need to",
+    "i should",
+    "let me",
+    "let's",
+    "since we",
+    "since the",
+    "the tool",
+    "querytype",
+    "querydatabase",
+    "filter by",
+    "we can query",
+    "we could",
+    "we might",
+    "the query",
+    "so we",
+    "but we",
+    "however",
+    "therefore",
+    "this means",
+    "in order to",
+    "to find",
+    "to get",
+    "to search",
+    "hallucinate",
+    "must not",
+    "cannot filter",
+  ];
 
-  // Default base structure
-  const base = {
-    filter: emptyFilter(),
-    message: "I'd be happy to help you find halal restaurants in Tokyo! What type of cuisine are you looking for?",
-  };
+  return thinkingIndicators.some((indicator) => t.includes(indicator));
+}
 
-  if (!parsed || typeof parsed !== "object") {
-    const safeText = (raw ?? "").trim();
-    // Only use raw text if it doesn't look like thinking
-    if (safeText && !looksLikeThinking(safeText) && safeText.length < 300) {
-      base.message = safeText;
+/**
+ * Generate a friendly message based on the filter
+ */
+function generateMessage(filter: FilterShape, placesCount?: number): string {
+  const parts: string[] = [];
+
+  if (filter.cuisine_subtype) {
+    parts.push(filter.cuisine_subtype.toLowerCase());
+  }
+
+  if (filter.keyword) {
+    parts.push(`in ${filter.keyword}`);
+  }
+
+  if (filter.price_level === "Budget") {
+    parts.push("(budget-friendly)");
+  } else if (filter.price_level === "Fine Dining") {
+    parts.push("(fine dining)");
+  }
+
+  const countText = placesCount !== undefined ? `Found ${placesCount} halal` : "Here are halal";
+
+  if (parts.length > 0) {
+    const description = parts.join(" ");
+    return `${countText} ${description} restaurants for you! 🍽️`;
+  }
+
+  return placesCount !== undefined
+    ? `Found ${placesCount} halal restaurants! 🍽️`
+    : "Here are some halal restaurants for you! 🍽️";
+}
+
+/**
+ * Build the final response, combining model output with inferred filter
+ */
+function buildResponse(
+  parsed: Record<string, unknown> | null,
+  userMessage: string,
+  places?: Array<Record<string, unknown>>
+): { filter: FilterShape; message: string; places?: Array<{ name: string; cuisine: string }> } {
+  const inferredFilter = inferFilterFromMessage(userMessage);
+
+  // Start with empty filter
+  let filter = emptyFilter();
+  let message = "";
+
+  if (parsed && typeof parsed === "object") {
+    // Try to extract filter from model response
+    if (parsed.filter && typeof parsed.filter === "object") {
+      const pf = parsed.filter as Record<string, unknown>;
+
+      // Use model's filter values, but fall back to inferred
+      filter = {
+        cuisine_subtype: (typeof pf.cuisine_subtype === "string" ? pf.cuisine_subtype : null) || inferredFilter.cuisine_subtype || null,
+        cuisine_category: (typeof pf.cuisine_category === "string" ? pf.cuisine_category : null) || inferredFilter.cuisine_category || null,
+        price_level: (typeof pf.price_level === "string" ? pf.price_level : null) || inferredFilter.price_level || null,
+        tag: (typeof pf.tag === "string" ? pf.tag : null) || null,
+        keyword: (typeof pf.keyword === "string" ? pf.keyword : null) || inferredFilter.keyword || null,
+        favorites: typeof pf.favorites === "boolean" ? pf.favorites : null,
+      };
+    } else {
+      // No filter from model, use inferred
+      filter = { ...emptyFilter(), ...inferredFilter };
     }
-    return base;
+
+    // Try to extract message
+    if (typeof parsed.message === "string" && parsed.message.length > 0 && !isThinkingText(parsed.message)) {
+      message = parsed.message;
+    }
+  } else {
+    // No valid JSON from model, use inferred filter
+    filter = { ...emptyFilter(), ...inferredFilter };
   }
 
-  const filter =
-    parsed.filter && typeof parsed.filter === "object"
-      ? (parsed.filter as Record<string, unknown>)
-      : {};
-
-  let msg = "";
-  if (typeof parsed.message === "string") {
-    msg = parsed.message;
-  } else if (parsed.message != null) {
-    msg = normalizeContent(parsed.message);
+  // Generate message if empty or is thinking text
+  if (!message || isThinkingText(message)) {
+    message = generateMessage(filter, places?.length);
   }
 
-  // If the message still looks like thinking, replace it
-  if (!msg || looksLikeThinking(msg)) {
-    msg = base.message;
-  }
-
-  return {
-    filter: { ...emptyFilter(), ...(filter as Partial<FilterShape>) },
-    message: msg,
+  // Build result
+  const result: { filter: FilterShape; message: string; places?: Array<{ name: string; cuisine: string }> } = {
+    filter,
+    message,
   };
+
+  // Add places if available
+  if (places && places.length > 0) {
+    result.places = places.slice(0, 10).map((p) => ({
+      name: String(p.name || "Unknown"),
+      cuisine: String(p.cuisine_subtype || p.cuisine_category || "Halal"),
+    }));
+  }
+
+  return result;
 }
 
 export async function POST(req: Request) {
@@ -188,78 +322,95 @@ export async function POST(req: Request) {
         role: "assistant",
         content: JSON.stringify({
           filter: emptyFilter(),
-          message: "Ask me about halal food in Tokyo!",
+          message: "Assalamualaikum! 👋 Ask me about halal food in Japan!",
         }),
       });
     }
+
+    // Get the last user message for filter inference
+    const lastUserMessage = [...messages].reverse().find((m: Record<string, unknown>) => m.role === "user");
+    const userMessageText = lastUserMessage ? normalizeContent(lastUserMessage.content) : "";
 
     const typedMessages = messages.map((msg: Record<string, unknown>) => ({
       role: msg.role as "user" | "assistant" | "system",
       content: normalizeContent(msg.content),
     }));
 
-    // 1) First call
+    // 1) First call to Apriel
     const completion = await chatWithApriel(typedMessages);
     const choice = completion.choices?.[0];
 
     if (!choice?.message) {
-      return NextResponse.json(
-        {
-          role: "assistant",
-          content: JSON.stringify({
-            filter: emptyFilter(),
-            message: "No response from AI.",
-          }),
-        },
-        { status: 500 }
-      );
+      // No response - use inferred filter to query DB
+      const inferredFilter = inferFilterFromMessage(userMessageText);
+      let places: Array<Record<string, unknown>> | undefined;
+
+      if (inferredFilter.cuisine_subtype || inferredFilter.keyword) {
+        let query = supabase
+          .from("places")
+          .select("id, name, cuisine_subtype, cuisine_category, city, address, price_level");
+
+        if (inferredFilter.cuisine_subtype) {
+          query = query.ilike("cuisine_subtype", `%${inferredFilter.cuisine_subtype}%`);
+        }
+        if (inferredFilter.keyword) {
+          query = query.or(
+            `name.ilike.%${inferredFilter.keyword}%,address.ilike.%${inferredFilter.keyword}%,city.ilike.%${inferredFilter.keyword}%`
+          );
+        }
+
+        const { data } = await query.limit(20);
+        places = data || undefined;
+      }
+
+      const response = buildResponse(null, userMessageText, places);
+      return NextResponse.json({
+        role: "assistant",
+        content: JSON.stringify(response),
+      });
     }
 
     const message = choice.message;
 
-    // 2) Tool call?
+    // 2) Handle tool calls
     if (message.tool_calls?.length) {
       const toolCall = message.tool_calls[0];
 
       if (toolCall.function?.name === "queryDatabase") {
         const args = JSON.parse(toolCall.function.arguments ?? "{}");
 
+        // Combine tool args with inferred filter for better coverage
+        const inferredFilter = inferFilterFromMessage(userMessageText);
+        const cuisine = args.cuisine || inferredFilter.cuisine_subtype;
+        const keyword = args.keyword || inferredFilter.keyword;
+
         let query = supabase
           .from("places")
-          .select(
-            "id, name, cuisine_subtype, cuisine_category, city, address, price_level"
-          );
+          .select("id, name, cuisine_subtype, cuisine_category, city, address, price_level");
 
-        if (args.cuisine) {
-          query = query.ilike("cuisine_subtype", `%${args.cuisine}%`);
+        if (cuisine) {
+          query = query.ilike("cuisine_subtype", `%${cuisine}%`);
         }
-        if (args.keyword) {
+        if (keyword) {
           query = query.or(
-            `name.ilike.%${args.keyword}%,address.ilike.%${args.keyword}%,city.ilike.%${args.keyword}%`
+            `name.ilike.%${keyword}%,address.ilike.%${keyword}%,city.ilike.%${keyword}%`
           );
         }
 
-        const { data, error } = await query;
+        const { data, error } = await query.limit(20);
 
-        // Tool result text (for the model)
+        // Build tool result for the model
         let toolResult = "";
-        if (error) toolResult = `Error querying database: ${error.message}`;
-        else if (!data?.length)
-          toolResult = "No results found matching that criteria.";
-        else if (args.queryType === "count")
-          toolResult = `Found ${data.length} places.`;
-        else {
-          const top5 = data
-            .slice(0, 5)
-            .map(
-              (p: Record<string, unknown>) =>
-                `"${p.name}" - ${p.cuisine_subtype ?? p.cuisine_category ?? "Halal"}${p.price_level ? ` (${p.price_level})` : ""}`
-            )
-            .join(", ");
-          toolResult = `Found ${data.length} places. Top results: ${top5}`;
+        if (error) {
+          toolResult = `Error: ${error.message}`;
+        } else if (!data?.length) {
+          toolResult = "No restaurants found.";
+        } else {
+          const names = data.slice(0, 5).map((p) => p.name).join(", ");
+          toolResult = `Found ${data.length} restaurants: ${names}`;
         }
 
-        // 3) Second call with tool output
+        // 3) Second call with tool result
         const secondCallMessages = [
           ...typedMessages,
           {
@@ -272,57 +423,61 @@ export async function POST(req: Request) {
         const finalCompletion = await chatWithApriel(secondCallMessages);
         const finalChoice = finalCompletion.choices?.[0];
 
-        if (!finalChoice?.message) {
-          return NextResponse.json(
-            {
-              role: "assistant",
-              content: JSON.stringify({
-                filter: emptyFilter(),
-                message: "No response from AI.",
-              }),
-            },
-            { status: 500 }
-          );
-        }
-
-        // 4) Coerce AI output to strict schema (strips thoughts)
-        const coerced = coerceToAppJson(finalChoice.message.content ?? "");
-
-        // 5) Inject places for UI convenience (always from DB, not hallucinated)
-        if (data?.length) {
-          coerced.places = data.slice(0, 10).map((p: Record<string, unknown>) => ({
-            name: String(p.name),
-            cuisine: String(p.cuisine_subtype || p.cuisine_category || "Halal"),
-          }));
-        } else {
-          coerced.places = [];
-        }
+        // Extract JSON and build response
+        const parsed = extractJsonFromResponse(finalChoice?.message?.content ?? "");
+        const response = buildResponse(parsed, userMessageText, data || undefined);
 
         return NextResponse.json({
           role: "assistant",
-          content: JSON.stringify(coerced),
+          content: JSON.stringify(response),
         });
       }
     }
 
-    // No tool call: still coerce to strict JSON (strip thoughts)
-    const coerced = coerceToAppJson(message.content ?? "");
+    // 3) No tool call - direct response
+    const parsed = extractJsonFromResponse(message.content ?? "");
+
+    // Query database based on inferred/parsed filter
+    const inferredFilter = inferFilterFromMessage(userMessageText);
+    const parsedFilter = (parsed?.filter as Record<string, unknown>) || {};
+    
+    const cuisine = (typeof parsedFilter.cuisine_subtype === "string" ? parsedFilter.cuisine_subtype : null) || inferredFilter.cuisine_subtype;
+    const keyword = (typeof parsedFilter.keyword === "string" ? parsedFilter.keyword : null) || inferredFilter.keyword;
+
+    let places: Array<Record<string, unknown>> | undefined;
+
+    if (cuisine || keyword) {
+      let query = supabase
+        .from("places")
+        .select("id, name, cuisine_subtype, cuisine_category, city, address, price_level");
+
+      if (cuisine) {
+        query = query.ilike("cuisine_subtype", `%${cuisine}%`);
+      }
+      if (keyword) {
+        query = query.or(
+          `name.ilike.%${keyword}%,address.ilike.%${keyword}%,city.ilike.%${keyword}%`
+        );
+      }
+
+      const { data } = await query.limit(20);
+      places = data || undefined;
+    }
+
+    const response = buildResponse(parsed, userMessageText, places);
 
     return NextResponse.json({
       role: "assistant",
-      content: JSON.stringify(coerced),
+      content: JSON.stringify(response),
     });
   } catch (error: unknown) {
-    console.error("Apriel API Error:", error);
-    return NextResponse.json(
-      {
-        role: "assistant",
-        content: JSON.stringify({
-          filter: emptyFilter(),
-          message: "AI processing failed. Please try again.",
-        }),
-      },
-      { status: 500 }
-    );
+    console.error("API Error:", error);
+    return NextResponse.json({
+      role: "assistant",
+      content: JSON.stringify({
+        filter: emptyFilter(),
+        message: "Sorry, something went wrong. Please try again! 🙏",
+      }),
+    });
   }
 }
