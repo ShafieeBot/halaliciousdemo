@@ -1,98 +1,51 @@
 // app/api/chat/route.ts
+
 import { NextResponse } from "next/server";
-import { chatWithApriel } from "@/lib/together-client";
+import { chatWithTogether } from "@/lib/together-client";
 
-function normalizeContent(content: unknown): string {
+function normalizeContent(content: any): string {
   if (typeof content === "string") return content;
-  if (content == null) return "";
-  try {
-    return JSON.stringify(content);
-  } catch {
-    return String(content);
-  }
-}
-
-function emptyFilter() {
-  return {
-    cuisine_subtype: null,
-    cuisine_category: null,
-    price_level: null,
-    tag: null,
-    keyword: null,
-    favorites: null,
-  };
+  if (Array.isArray(content)) return content.map(c => c.text).join(" ");
+  return "";
 }
 
 export async function POST(req: Request) {
   try {
-    const { messages } = await req.json();
+    const { messages, context } = await req.json();
+    const lastFilter = context?.lastFilter ?? null;
 
-    if (!messages || !Array.isArray(messages) || messages.length === 0) {
-      return NextResponse.json({
-        role: "assistant",
-        content: JSON.stringify({
-          filter: emptyFilter(),
-          message: "Assalamualaikum! 👋 Ask me about halal food!",
-          places: [],
-        }),
-      });
-    }
-
-    // Normalize messages for AI
     const typedMessages = messages.map((msg: any) => ({
-      role: msg.role as "user" | "assistant" | "system",
+      role: msg.role as "system" | "user" | "assistant",
       content: normalizeContent(msg.content),
     }));
 
-    console.log("🔍 Calling AI with messages:", typedMessages.length);
-
-    // Call AI
-    const completion = await chatWithApriel(typedMessages);
-    
-    console.log("✅ AI response received");
-    console.log("Raw response:", JSON.stringify(completion, null, 2));
-
-    const choice = completion.choices?.[0];
-    const aiContent = choice?.message?.content || "";
-
-    console.log("📝 AI content:", aiContent);
-
-    // Try to parse AI response as JSON
-    let parsed: any = null;
-    try {
-      parsed = JSON.parse(aiContent);
-    } catch {
-      console.log("⚠️ AI response is not JSON, using as message");
-      parsed = {
-        filter: emptyFilter(),
-        message: aiContent || "I received your message!",
-        places: [],
-      };
+    // 🔑 Inject current filter context for follow-ups
+    if (lastFilter) {
+      typedMessages.unshift({
+        role: "system",
+        content:
+          `CURRENT_FILTER_JSON=${JSON.stringify(lastFilter)}\n` +
+          `For follow-ups, refine this filter instead of starting over.`,
+      });
     }
 
-    // Ensure we have the required fields
-    const response = {
-      filter: parsed.filter || emptyFilter(),
-      message: parsed.message || "Here's what I found!",
-      places: parsed.places || [],
-    };
+    const completion = await chatWithTogether(typedMessages);
 
-    console.log("📤 Returning response:", response.message);
+    if (!completion) {
+      return NextResponse.json(
+        { error: "No response from AI" },
+        { status: 500 }
+      );
+    }
 
-    return NextResponse.json({
-      role: "assistant",
-      content: JSON.stringify(response),
-    });
+    const parsed = JSON.parse(completion);
 
-  } catch (error: unknown) {
-    console.error("❌ API Error:", error);
-    return NextResponse.json({
-      role: "assistant",
-      content: JSON.stringify({
-        filter: emptyFilter(),
-        message: `Error: ${error instanceof Error ? error.message : "Unknown error"}`,
-        places: [],
-      }),
-    });
+    return NextResponse.json(parsed);
+  } catch (err: any) {
+    console.error("Chat API error:", err);
+    return NextResponse.json(
+      { error: "Failed to process chat request" },
+      { status: 500 }
+    );
   }
 }
