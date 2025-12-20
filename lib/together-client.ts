@@ -1,5 +1,6 @@
 // lib/together-client.ts
 import Together from "together-ai";
+import type { ChatCompletionMessageParam } from "together-ai/resources/chat/completions";
 
 const together = new Together({
   apiKey: process.env.TOGETHER_API_KEY,
@@ -34,20 +35,14 @@ Response Format:
 type Role = "user" | "assistant" | "system" | "tool";
 
 /**
- * App-level message type used by chatWithApriel().
- * Note: content can be null/undefined because tool-call style messages may omit it.
+ * App-level message type
+ * - tool messages MUST have tool_call_id
+ * - content can be null/undefined upstream; we'll normalize to string for Together
  */
-export interface Message {
-  role: Role;
-  content?: string | null;
-  tool_call_id?: string;
-  name?: string;
-}
+export type Message =
+  | { role: "user" | "assistant" | "system"; content?: string | null; name?: string }
+  | { role: "tool"; content?: string | null; tool_call_id: string; name?: string };
 
-/**
- * Ensure Together always receives content as a string.
- * (Empty string is safer than crashing TypeScript/build.)
- */
 function normalizeContent(content: unknown): string {
   if (typeof content === "string") return content;
   if (content == null) return "";
@@ -58,23 +53,38 @@ function normalizeContent(content: unknown): string {
   }
 }
 
+function toTogetherMessage(m: Message): ChatCompletionMessageParam {
+  const content = normalizeContent(m.content);
+
+  if (m.role === "tool") {
+    // tool messages REQUIRE tool_call_id in Together's typings
+    return {
+      role: "tool",
+      tool_call_id: m.tool_call_id,
+      content,
+    };
+  }
+
+  // user/assistant/system messages
+  return {
+    role: m.role,
+    content,
+  } as ChatCompletionMessageParam;
+}
+
 export async function chatWithApriel(messages: Message[]) {
+  const togetherMessages: ChatCompletionMessageParam[] = [
+    { role: "system", content: SYSTEM_PROMPT },
+    ...messages.map(toTogetherMessage),
+  ];
+
   const response = await together.chat.completions.create({
     model: "ServiceNow-AI/Apriel-1.6-15b-Thinker",
-    messages: [
-      {
-        role: "system",
-        content: SYSTEM_PROMPT,
-      },
-      ...messages.map((m) => ({
-        role: m.role,
-        content: normalizeContent(m.content),
-      })),
-    ],
+    messages: togetherMessages,
     max_tokens: 1024,
     temperature: 0.7,
 
-    // Enable JSON Mode for structured outputs
+    // JSON Mode for structured outputs
     response_format: { type: "json_object" },
 
     // Tool/Function calling
