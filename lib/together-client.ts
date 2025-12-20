@@ -1,7 +1,9 @@
 // lib/together-client.ts
 import Together from "together-ai";
 
-const together = new Together();
+const together = new Together({
+  apiKey: process.env.TOGETHER_API_KEY,
+});
 
 const SYSTEM_PROMPT = `
 You are a friendly, knowledgeable local guide helping Muslims find halal food in Tokyo.
@@ -29,11 +31,31 @@ Response Format:
 }
 `;
 
-interface Message {
-  role: "user" | "assistant" | "system" | "tool";
-  content: string;
+type Role = "user" | "assistant" | "system" | "tool";
+
+/**
+ * App-level message type used by chatWithApriel().
+ * Note: content can be null/undefined because tool-call style messages may omit it.
+ */
+export interface Message {
+  role: Role;
+  content?: string | null;
   tool_call_id?: string;
   name?: string;
+}
+
+/**
+ * Ensure Together always receives content as a string.
+ * (Empty string is safer than crashing TypeScript/build.)
+ */
+function normalizeContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (content == null) return "";
+  try {
+    return JSON.stringify(content);
+  } catch {
+    return String(content);
+  }
 }
 
 export async function chatWithApriel(messages: Message[]) {
@@ -46,7 +68,7 @@ export async function chatWithApriel(messages: Message[]) {
       },
       ...messages.map((m) => ({
         role: m.role,
-        content: m.content,
+        content: normalizeContent(m.content),
       })),
     ],
     max_tokens: 1024,
@@ -58,7 +80,7 @@ export async function chatWithApriel(messages: Message[]) {
     // Tool/Function calling
     tools: [
       {
-        type: "function" as const,
+        type: "function",
         function: {
           name: "queryDatabase",
           description:
