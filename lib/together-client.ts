@@ -33,6 +33,12 @@ Response Format:
 `;
 
 export async function chatWithApriel(messages: ChatCompletionMessageParam[]) {
+  // Normalize messages to ensure content is always a string
+  const safeMessages = messages.map((m) => ({
+    ...m,
+    content: (m as { content?: string }).content ?? "",
+  })) as ChatCompletionMessageParam[];
+
   const response = await together.chat.completions.create({
     model: "ServiceNow-AI/Apriel-1.6-15b-Thinker",
     messages: [
@@ -40,7 +46,7 @@ export async function chatWithApriel(messages: ChatCompletionMessageParam[]) {
         role: "system",
         content: SYSTEM_PROMPT,
       },
-      ...messages,
+      ...safeMessages,
     ],
     max_tokens: 1024,
     temperature: 0.7,
