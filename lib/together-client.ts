@@ -1,10 +1,7 @@
 // lib/together-client.ts
 import Together from "together-ai";
-import type { ChatCompletionMessageParam } from "together-ai/resources/chat/completions";
 
-const together = new Together({
-  apiKey: process.env.TOGETHER_API_KEY,
-});
+const together = new Together();
 
 const SYSTEM_PROMPT = `
 You are a friendly, knowledgeable local guide helping Muslims find halal food in Tokyo.
@@ -32,22 +29,25 @@ Response Format:
 }
 `;
 
-export async function chatWithApriel(messages: ChatCompletionMessageParam[]) {
-  // Sanitize messages to ensure content is always a string
-  // Use type assertion to satisfy Together AI's strict typing
-  const sanitizedMessages = messages.map((m) => ({
-    ...m,
-    content: m.content ?? "",
-  })) as ChatCompletionMessageParam[];
+interface Message {
+  role: "user" | "assistant" | "system" | "tool";
+  content: string;
+  tool_call_id?: string;
+  name?: string;
+}
 
+export async function chatWithApriel(messages: Message[]) {
   const response = await together.chat.completions.create({
     model: "ServiceNow-AI/Apriel-1.6-15b-Thinker",
     messages: [
       {
-        role: "system" as const,
+        role: "system",
         content: SYSTEM_PROMPT,
       },
-      ...sanitizedMessages,
+      ...messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+      })),
     ],
     max_tokens: 1024,
     temperature: 0.7,
@@ -58,7 +58,7 @@ export async function chatWithApriel(messages: ChatCompletionMessageParam[]) {
     // Tool/Function calling
     tools: [
       {
-        type: "function",
+        type: "function" as const,
         function: {
           name: "queryDatabase",
           description:
