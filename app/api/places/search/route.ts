@@ -2,75 +2,92 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const supabase = createClient(supabaseUrl, supabaseKey);
 
-async function fetchRatings(placeIds: string[]) {
-  const key = process.env.GOOGLE_PLACES_API_KEY;
-  if (!key) return new Map();
-
-  const ratings = new Map();
-
-  for (const pid of placeIds.slice(0, 15)) {
-    if (!pid || pid === 'N/A') continue;
-
-    const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${pid}&fields=rating,user_ratings_total&key=${key}`;
-    const res = await fetch(url);
-    const json = await res.json();
-
-    ratings.set(pid, {
-      rating: json?.result?.rating ?? null,
-      count: json?.result?.user_ratings_total ?? null,
-    });
-  }
-
-  return ratings;
+function dayNameUTCPlus9(now = new Date()) {
+  // Tokyo time (JST) is UTC+9
+  const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  return days[jst.getUTCDay()];
 }
 
 export async function POST(req: Request) {
-  const { variables } = await req.json();
+  try {
+    const body = await req.json();
+    const filter = body?.filter || {};
 
-  let q = supabase
-    .from('places')
-    .select('*')
-    .limit(50);
+    // If empty filter => return all (or you can choose to return []
+    const hasAny = Object.values(filter).some(
+      (v: any) => v !== null && v !== undefined && String(v).trim() !== ''
+    );
+    if (!hasAny) {
+      const { data, error } = await supabase.from('places').select('*').limit(2000);
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({ places: data ?? [] });
+    }
 
-  if (variables.cuisine_subtype)
-    q = q.ilike('cuisine_subtype', `%${variables.cuisine_subtype}%`);
+    let q = supabase.from('places').select('*');
 
-  if (variables.halal_status)
-    q = q.ilike('halal_status', `%${variables.halal_status}%`);
+    // cuisine_subtype
+    if (filter.cuisine_subtype) {
+      q = q.ilike('cuisine_subtype', `%${filter.cuisine_subtype}%`);
+    }
 
-  if (variables.price_level)
-    q = q.eq('price_level', variables.price_level);
+    // cuisine_category
+    if (filter.cuisine_category) {
+      q = q.ilike('cuisine_category', `%${filter.cuisine_category}%`);
+    }
 
-  if (variables.location) {
-    const k = variables.location;
-    q = q.or(`name.ilike.%${k}%,address.ilike.%${k}%,city.ilike.%${k}%`);
+    // halal_status
+    if (filter.halal_status) {
+      q = q.ilike('halal_status', `%${filter.halal_status}%`);
+    }
+
+    // price_level (exact match preferred)
+    if (filter.price_level) {
+      q = q.eq('price_level', filter.price_level);
+    }
+
+    // tag (tags array contains)
+    if (filter.tag) {
+      // Postgres array contains
+      q = q.contains('tags', [filter.tag]);
+    }
+
+    // keyword search (name/address/city/cuisine/tags)
+    if (filter.keyword) {
+      const k = String(filter.keyword).replace(/,/g, ' ').trim();
+      // Use OR condition across columns. tags is array; easiest is text cast match.
+      q = q.or(
+        [
+          `name.ilike.%${k}%`,
+          `address.ilike.%${k}%`,
+          `city.ilike.%${k}%`,
+          `cuisine_subtype.ilike.%${k}%`,
+          `cuisine_category.ilike.%${k}%`,
+          `tags.cs.{${k}}`, // array contains (best-effort if tag exactly matches a token)
+        ].join(',')
+      );
+    }
+
+    // open_now (basic: must have opening_hours and mention today's day name)
+    if (filter.open_now === true) {
+      const day = dayNameUTCPlus9();
+      // opening_hours is jsonb; we can do a text ilike on its JSON representation
+      q = q
+        .not('opening_hours', 'is', null)
+        .neq('opening_hours', '[]')
+        .ilike('opening_hours::text' as any, `%${day}%`);
+    }
+
+    const { data, error } = await q.limit(2000);
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    return NextResponse.json({ places: data ?? [] });
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message || 'Unexpected server error' }, { status: 500 });
   }
-
-  const { data } = await q;
-  let rows = data || [];
-
-  if (variables.open_now === true) {
-    rows = rows.filter(r => Array.isArray(r.opening_hours) && r.opening_hours.length > 0);
-  }
-
-  let ratings = new Map();
-  if (variables.sort_by === 'rating') {
-    ratings = await fetchRatings(rows.map(r => r.place_id));
-    rows = rows
-      .map(r => ({
-        ...r,
-        rating: ratings.get(r.place_id)?.rating ?? null,
-        ratingCount: ratings.get(r.place_id)?.count ?? null,
-      }))
-      .sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
-  }
-
-  return NextResponse.json({
-    places: rows,
-  });
 }
