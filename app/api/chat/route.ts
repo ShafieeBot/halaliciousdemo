@@ -87,15 +87,20 @@ export async function POST(req: Request) {
       ],
     });
 
-    let parsed;
-    try {
-      parsed = JSON.parse(completion.choices[0].message.content);
-    } catch {
-      parsed = {
-        filter: {},
-        message: "I couldn't understand that. Try asking differently.",
-      };
-    }
+    llet parsed: any;
+
+const rawContent =
+  completion.choices?.[0]?.message?.content ?? '';
+
+try {
+  parsed = JSON.parse(rawContent);
+} catch {
+  parsed = {
+    filter: {},
+    message: "I couldn't understand that. Try asking differently.",
+  };
+}
+
 
     // 🔑 THIS LINE RESTORES EVERYTHING
     parsed.filter = enforceLegacyKeyword(parsed.filter || {}, userText);
