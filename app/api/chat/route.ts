@@ -1,3 +1,4 @@
+// app/api/chat/route.ts
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { chatWithApriel } from '@/lib/together-client';
@@ -16,7 +17,17 @@ export async function POST(req: Request) {
 
     // First call to Apriel
     const completion = await chatWithApriel(messages);
-    const message = completion.choices[0].message;
+    const choice = completion.choices[0];
+    
+    // Check if choice and message exist
+    if (!choice || !choice.message) {
+      return NextResponse.json(
+        { error: 'Invalid response from AI service' },
+        { status: 500 }
+      );
+    }
+    
+    const message = choice.message;
 
     // Check if model wants to use tool
     if (message.tool_calls && message.tool_calls.length > 0) {
@@ -72,7 +83,15 @@ export async function POST(req: Request) {
           },
         ]);
 
-        let finalContent = finalCompletion.choices[0].message.content || "{}";
+        const finalChoice = finalCompletion.choices[0];
+        if (!finalChoice || !finalChoice.message) {
+          return NextResponse.json(
+            { error: 'Invalid response from AI service' },
+            { status: 500 }
+          );
+        }
+
+        let finalContent = finalChoice.message.content || "{}";
         
         // Inject actual place data into response
         try {
@@ -100,7 +119,7 @@ export async function POST(req: Request) {
     // No tool call - return direct response
     return NextResponse.json({
       role: 'assistant',
-      content: message.content,
+      content: message.content || "I couldn't generate a response.",
     });
 
   } catch (error: any) {
