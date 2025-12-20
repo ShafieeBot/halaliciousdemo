@@ -17,12 +17,75 @@ function normalizeContent(content: unknown): string {
   }
 }
 
+type FilterShape = {
+  cuisine_subtype: string | null;
+  cuisine_category: string | null;
+  price_level: string | null;
+  tag: string | null;
+  keyword: string | null;
+  favorites: boolean | null;
+};
+
+function emptyFilter(): FilterShape {
+  return {
+    cuisine_subtype: null,
+    cuisine_category: null,
+    price_level: null,
+    tag: null,
+    keyword: null,
+    favorites: null,
+  };
+}
+
+/**
+ * Ensures the returned content is ALWAYS a JSON string matching:
+ * { filter: {...}, message: string, ...optional }
+ */
+function ensureJsonContent(raw: string): string {
+  const trimmed = (raw ?? "").trim();
+
+  // If empty, return safe default
+  if (!trimmed) {
+    return JSON.stringify({
+      filter: emptyFilter(),
+      message: "Sorry — I didn’t receive a response. Please try again.",
+    });
+  }
+
+  // Try parse as JSON
+  try {
+    const parsed = JSON.parse(trimmed);
+
+    // If it’s already correct-ish, normalize required fields
+    const filter = typeof parsed.filter === "object" && parsed.filter !== null ? parsed.filter : {};
+    const normalized = {
+      ...parsed,
+      filter: {
+        ...emptyFilter(),
+        ...filter,
+      },
+      message: typeof parsed.message === "string" ? parsed.message : normalizeContent(parsed.message),
+    };
+
+    return JSON.stringify(normalized);
+  } catch {
+    // Not JSON: wrap it
+    return JSON.stringify({
+      filter: emptyFilter(),
+      message: trimmed,
+    });
+  }
+}
+
 export async function POST(req: Request) {
   try {
     const { messages } = await req.json();
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
-      return NextResponse.json({ error: "Invalid messages format." }, { status: 400 });
+      return NextResponse.json(
+        { role: "assistant", content: ensureJsonContent("") },
+        { status: 400 }
+      );
     }
 
     const typedMessages = messages.map((msg: any) => ({
@@ -30,20 +93,25 @@ export async function POST(req: Request) {
       content: normalizeContent(msg.content),
     }));
 
+    // First call
     const completion = await chatWithApriel(typedMessages);
     const choice = completion.choices?.[0];
 
-    if (!choice || !choice.message) {
-      return NextResponse.json({ error: "Invalid response from AI service" }, { status: 500 });
+    if (!choice?.message) {
+      return NextResponse.json(
+        { role: "assistant", content: ensureJsonContent("") },
+        { status: 500 }
+      );
     }
 
     const message = choice.message;
 
-    if (message.tool_calls && message.tool_calls.length > 0) {
+    // Tool call?
+    if (message.tool_calls?.length) {
       const toolCall = message.tool_calls[0];
 
-      if (toolCall.function.name === "queryDatabase") {
-        const args = JSON.parse(toolCall.function.arguments);
+      if (toolCall.function?.name === "queryDatabase") {
+        const args = JSON.parse(toolCall.function.arguments ?? "{}");
 
         let query = supabase.from("places").select("name, cuisine_subtype, city, address");
 
@@ -59,71 +127,68 @@ export async function POST(req: Request) {
         const { data, error } = await query;
 
         let toolResult = "";
-        if (error) {
-          toolResult = `Error querying database: ${error.message}`;
-        } else if (!data || data.length === 0) {
-          toolResult = "No results found matching that criteria.";
-        } else {
-          if (args.queryType === "count") {
-            toolResult = `Found ${data.length} places.`;
-          } else {
-            const top5 = data
-              .slice(0, 5)
-              .map((p: any) => `Name: "${p.name}" (Cuisine: ${p.cuisine_subtype})`)
-              .join("\n");
-            toolResult = `Found ${data.length} places. Here are the top ones:\n${top5}`;
-          }
+        if (error) toolResult = `Error querying database: ${error.message}`;
+        else if (!data?.length) toolResult = "No results found matching that criteria.";
+        else if (args.queryType === "count") toolResult = `Found ${data.length} places.`;
+        else {
+          const top5 = data
+            .slice(0, 5)
+            .map((p: any) => `Name: "${p.name}" (Cuisine: ${p.cuisine_subtype})`)
+            .join("\n");
+          toolResult = `Found ${data.length} places. Here are the top ones:\n${top5}`;
         }
 
+        // Second call (tool result)
         const secondCallMessages = [
           ...typedMessages,
-          {
-            role: "assistant" as const,
-            content: normalizeContent(message.content),
-          },
-          {
-            role: "tool" as const,
-            tool_call_id: toolCall.id,
-            content: toolResult,
-          },
+          { role: "assistant" as const, content: normalizeContent(message.content) },
+          { role: "tool" as const, tool_call_id: toolCall.id, content: toolResult },
         ];
 
         const finalCompletion = await chatWithApriel(secondCallMessages);
         const finalChoice = finalCompletion.choices?.[0];
 
-        if (!finalChoice || !finalChoice.message) {
-          return NextResponse.json({ error: "Invalid response from AI service" }, { status: 500 });
+        if (!finalChoice?.message) {
+          return NextResponse.json(
+            { role: "assistant", content: ensureJsonContent("") },
+            { status: 500 }
+          );
         }
 
-        let finalContent = finalChoice.message.content ?? "{}";
+        let finalContent = ensureJsonContent(finalChoice.message.content ?? "");
 
+        // Inject places into JSON (safe)
         try {
           const parsed = JSON.parse(finalContent);
-
           if (args.queryType === "list" && data) {
             parsed.places = data.slice(0, 10).map((p: any) => ({
               name: p.name,
               cuisine: p.cuisine_subtype,
             }));
           }
-
           finalContent = JSON.stringify(parsed);
-        } catch (e) {
-          console.error("Error injecting places into response", e);
+        } catch {
+          // If something went wrong, ensureJsonContent already made it safe
         }
 
         return NextResponse.json({ role: "assistant", content: finalContent });
       }
     }
 
-    return NextResponse.json({
-      role: "assistant",
-      content: message.content || "I couldn't generate a response.",
-    });
+    // No tool call — STILL enforce JSON
+    const safe = ensureJsonContent(message.content ?? "");
+    return NextResponse.json({ role: "assistant", content: safe });
   } catch (error: any) {
     console.error("Apriel API Error:", error);
+    // IMPORTANT: return JSON-shaped content even on error
     return NextResponse.json(
-      { error: error.message || "AI processing failed" },
+      {
+        role: "assistant",
+        content: JSON.stringify({
+          filter: emptyFilter(),
+          message: "AI processing failed. Please try again.",
+        }),
+      },
       { status: 500 }
     );
   }
