@@ -1,18 +1,28 @@
 // app/api/chat/route.ts
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { chatWithApriel } from "@/lib/together-client";
+import { chatWithApriel, type Message as AprielMessage } from "@/lib/together-client";
+import type { ChatCompletionMessageParam } from "together-ai/resources/chat/completions";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Match the Message interface from together-client.ts
-interface Message {
-  role: "user" | "assistant" | "system" | "tool";
-  content: string;
-  tool_call_id?: string;
-  name?: string;
+function normalizeContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (content == null) return "";
+  try {
+    return JSON.stringify(content);
+  } catch {
+    return String(content);
+  }
+}
+
+function toAprielMessages(messages: any[]): AprielMessage[] {
+  return messages.map((msg: any) => ({
+    role: msg.role as "user" | "assistant" | "system",
+    content: normalizeContent(msg.content),
+  }));
 }
 
 export async function POST(req: Request) {
@@ -20,124 +30,117 @@ export async function POST(req: Request) {
     const { messages } = await req.json();
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
-      return NextResponse.json(
-        { error: "Invalid messages format." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Invalid messages format." }, { status: 400 });
     }
 
-    // Sanitize messages to match the Message interface
-    const typedMessages: Message[] = messages.map(
-      (m: { role?: string; content?: string }) => ({
-        role: (m.role || "user") as Message["role"],
-        content: m.content ?? "",
-      })
-    );
+    // ✅ Use your app's message type for chatWithApriel
+    const aprielMessages: AprielMessage[] = toAprielMessages(messages);
 
     // First call to Apriel
-    const completion = await chatWithApriel(typedMessages);
-    const choice = completion.choices[0];
+    const completion = await chatWithApriel(aprielMessages);
+    const choice = completion.choices?.[0];
 
-    // Check if choice and message exist
     if (!choice || !choice.message) {
-      return NextResponse.json(
-        { error: "No response from AI" },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "Invalid response from AI service" }, { status: 500 });
     }
 
     const message = choice.message;
 
-    // Check for tool calls
+    // Check if model wants to use tool
     if (message.tool_calls && message.tool_calls.length > 0) {
       const toolCall = message.tool_calls[0];
 
-      if (toolCall.function?.name === "queryDatabase") {
-        const args = JSON.parse(toolCall.function.arguments || "{}");
+      if (toolCall.function.name === "queryDatabase") {
+        const args = JSON.parse(toolCall.function.arguments);
+        console.log("Using queryDatabase tool:", args);
 
         // Execute Supabase query
-        let query = supabase.from("places").select("*");
+        let query = supabase.from("places").select("name, cuisine_subtype, city, address");
 
         if (args.cuisine) {
           query = query.ilike("cuisine_subtype", `%${args.cuisine}%`);
         }
         if (args.keyword) {
           query = query.or(
-            `name.ilike.%${args.keyword}%,address.ilike.%${args.keyword}%`
+            `name.ilike.%${args.keyword}%,address.ilike.%${args.keyword}%,city.ilike.%${args.keyword}%`
           );
         }
 
         const { data, error } = await query;
 
+        // Build tool result
+        let toolResult = "";
         if (error) {
-          console.error("Supabase error:", error);
-          return NextResponse.json(
-            { error: "Database query failed" },
-            { status: 500 }
-          );
+          toolResult = `Error querying database: ${error.message}`;
+        } else if (!data || data.length === 0) {
+          toolResult = "No results found matching that criteria.";
+        } else {
+          if (args.queryType === "count") {
+            toolResult = `Found ${data.length} places.`;
+          } else {
+            const top5 = data
+              .slice(0, 5)
+              .map((p: any) => `Name: "${p.name}" (Cuisine: ${p.cuisine_subtype})`)
+              .join("\n");
+            toolResult = `Found ${data.length} places. Here are the top ones:\n${top5}`;
+          }
         }
 
-        // Build tool result
-        const toolResult =
-          args.queryType === "count"
-            ? `Found ${data?.length || 0} places.`
-            : `Found ${data?.length || 0} places: ${data
-                ?.slice(0, 5)
-                .map((p: { name: string }) => p.name)
-                .join(", ")}`;
-
-        // Second call with tool result
-        const toolMessages: Message[] = [
-          ...typedMessages,
+        // ✅ Second call messages in AprielMessage[] format (NOT ChatCompletionMessageParam[])
+        const secondCallMessages: AprielMessage[] = [
+          ...aprielMessages,
           {
             role: "assistant",
-            content: message.content || "",
+            content: normalizeContent(message.content), // may be null in tool-call messages
           },
           {
             role: "tool",
-            content: toolResult,
             tool_call_id: toolCall.id,
+            content: toolResult,
           },
         ];
 
-        const secondCompletion = await chatWithApriel(toolMessages);
-        const secondChoice = secondCompletion.choices[0];
+        const finalCompletion = await chatWithApriel(secondCallMessages);
 
-        if (secondChoice?.message?.content) {
-          try {
-            const parsed = JSON.parse(secondChoice.message.content);
-            return NextResponse.json(parsed);
-          } catch {
-            return NextResponse.json({
-              filter: {},
-              message: secondChoice.message.content,
-            });
-          }
+        const finalChoice = finalCompletion.choices?.[0];
+        if (!finalChoice || !finalChoice.message) {
+          return NextResponse.json({ error: "Invalid response from AI service" }, { status: 500 });
         }
-      }
-    }
 
-    // No tool call - return direct response
-    if (message.content) {
-      try {
-        const parsed = JSON.parse(message.content);
-        return NextResponse.json(parsed);
-      } catch {
+        let finalContent = finalChoice.message?.content ?? "{}";
+
+        // Inject actual place data into response
+        try {
+          const parsed = JSON.parse(finalContent);
+
+          if (args.queryType === "list" && data) {
+            parsed.places = data.slice(0, 10).map((p: any) => ({
+              name: p.name,
+              cuisine: p.cuisine_subtype,
+            }));
+          }
+
+          finalContent = JSON.stringify(parsed);
+        } catch (e) {
+          console.error("Error injecting places into response", e);
+        }
+
         return NextResponse.json({
-          filter: {},
-          message: message.content,
+          role: "assistant",
+          content: finalContent,
         });
       }
     }
 
+    // No tool call - return direct response
     return NextResponse.json({
-      filter: {},
-      message: "I'm not sure how to help with that. Try asking about halal restaurants in Tokyo!",
+      role: "assistant",
+      content: message.content || "I couldn't generate a response.",
     });
-  } catch (error) {
-    console.error("Chat API error:", error);
+  } catch (error: any) {
+    console.error("Apriel API Error:", error);
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: error.message || "AI processing failed" },
       { status: 500 }
     );
   }
