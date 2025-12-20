@@ -16,7 +16,7 @@ CRITICAL: After using the 'queryDatabase' tool, your final response MUST still b
 - If the user asked to "show" or "find" places, YOU MUST update the 'filter' object so the map updates!
 - For example, if you found 3 ramen places, set "filter": { "cuisine_subtype": "Ramen" }.
 - If recommending a SPECIFIC place (like "Fortune Tree"), set "filter": { "keyword": "Fortune Tree" }.
-- If the user specifies a LOCATION (e.g. "Ramen in Asakusa"), set "filter": { "cuisine_subtype": "Raman", "keyword": "Asakusa" }.
+- If the user specifies a LOCATION (e.g. "Ramen in Asakusa"), set "filter": { "cuisine_subtype": "Ramen", "keyword": "Asakusa" }.
 
 Response Format:
 {
@@ -33,12 +33,6 @@ Response Format:
 `;
 
 export async function chatWithApriel(messages: ChatCompletionMessageParam[]) {
-  // FIX: Ensure all message content is a string (Together AI types require this)
-  const safeMessages: ChatCompletionMessageParam[] = messages.map((m) => ({
-    ...m,
-    content: (m.content ?? "") as string,
-  }));
-
   const response = await together.chat.completions.create({
     model: "ServiceNow-AI/Apriel-1.6-15b-Thinker",
     messages: [
@@ -46,28 +40,34 @@ export async function chatWithApriel(messages: ChatCompletionMessageParam[]) {
         role: "system",
         content: SYSTEM_PROMPT,
       },
-      ...safeMessages,
+      // FIX: Map inline to ensure content is always a string (Together AI types require this)
+      ...messages.map((m) => ({
+        ...m,
+        content: (m.content ?? "") as string,
+      })),
     ],
     max_tokens: 1024,
     temperature: 0.7,
-    
+
     // Enable JSON Mode for structured outputs
     response_format: { type: "json_object" },
-    
+
     // Tool/Function calling
     tools: [
       {
         type: "function",
         function: {
           name: "queryDatabase",
-          description: "Query the halal restaurant database to count or find specific places.",
+          description:
+            "Query the halal restaurant database to count or find specific places.",
           parameters: {
             type: "object",
             properties: {
               queryType: {
                 type: "string",
                 enum: ["count", "list"],
-                description: "Whether to count matches or list specific restaurant names.",
+                description:
+                  "Whether to count matches or list specific restaurant names.",
               },
               cuisine: {
                 type: "string",
@@ -75,7 +75,8 @@ export async function chatWithApriel(messages: ChatCompletionMessageParam[]) {
               },
               keyword: {
                 type: "string",
-                description: "General keyword to search in name or tags (e.g. Shibuya, Spicy)",
+                description:
+                  "General keyword to search in name or tags (e.g. Shibuya, Spicy)",
               },
             },
             required: ["queryType"],
