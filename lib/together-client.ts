@@ -1,6 +1,6 @@
 // lib/together-client.ts
 import Together from "together-ai";
-import type { ChatCompletionMessageParam } from "together-ai/resources/chat/completions";
+import type { CompletionCreateParams } from "together-ai/resources/chat/completions";
 
 const together = new Together({
   apiKey: process.env.TOGETHER_API_KEY,
@@ -32,16 +32,14 @@ Response Format:
 }
 `;
 
-type Role = "user" | "assistant" | "system" | "tool";
-
 /**
  * App-level message type
  * - tool messages MUST have tool_call_id
- * - content can be null/undefined upstream; we'll normalize to string for Together
+ * - content can be null/undefined upstream; we normalize to string before sending
  */
 export type Message =
   | { role: "user" | "assistant" | "system"; content?: string | null; name?: string }
-  | { role: "tool"; content?: string | null; tool_call_id: string; name?: string };
+  | { role: "tool"; tool_call_id: string; content?: string | null; name?: string };
 
 function normalizeContent(content: unknown): string {
   if (typeof content === "string") return content;
@@ -53,34 +51,60 @@ function normalizeContent(content: unknown): string {
   }
 }
 
-function toTogetherMessage(m: Message): ChatCompletionMessageParam {
+function toTogetherMessage(m: Message): CompletionCreateParams.Message {
   const content = normalizeContent(m.content);
 
   if (m.role === "tool") {
-    // tool messages REQUIRE tool_call_id in Together's typings
-    return {
+    // IMPORTANT: Together's create() overload expects tool message content as string (not optional)
+    const toolMsg: CompletionCreateParams.ChatCompletionToolMessageParam = {
       role: "tool",
       tool_call_id: m.tool_call_id,
       content,
     };
+    return toolMsg;
   }
 
-  // user/assistant/system messages
-  return {
-    role: m.role,
+  if (m.role === "system") {
+    const sys: CompletionCreateParams.ChatCompletionSystemMessageParam = {
+      role: "system",
+      content,
+    };
+    return sys;
+  }
+
+  if (m.role === "user") {
+    const user: CompletionCreateParams.ChatCompletionUserMessageParam = {
+      role: "user",
+      content,
+    };
+    return user;
+  }
+
+  // assistant
+  const assistant: CompletionCreateParams.ChatCompletionAssistantMessageParam = {
+    role: "assistant",
     content,
-  } as ChatCompletionMessageParam;
+  };
+  return assistant;
 }
 
 export async function chatWithApriel(messages: Message[]) {
-  const togetherMessages: ChatCompletionMessageParam[] = [
+  const togetherMessages: CompletionCreateParams.Message[] = [
     { role: "system", content: SYSTEM_PROMPT },
     ...messages.map(toTogetherMessage),
   ];
 
+  // Extra safeguard: ensure any message with "content" has a real string (never undefined)
+  const sanitized: CompletionCreateParams.Message[] = togetherMessages.map((m) => {
+    if ("content" in m) {
+      return { ...m, content: (m as any).content ?? "" };
+    }
+    return m;
+  });
+
   const response = await together.chat.completions.create({
     model: "ServiceNow-AI/Apriel-1.6-15b-Thinker",
-    messages: togetherMessages,
+    messages: sanitized,
     max_tokens: 1024,
     temperature: 0.7,
 
