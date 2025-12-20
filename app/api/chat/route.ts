@@ -38,75 +38,144 @@ function emptyFilter(): FilterShape {
 }
 
 /**
- * Extract the first valid JSON object found in a string.
- * This removes "thinking" leakage by ignoring anything outside JSON.
+ * Extract the LAST valid JSON object containing "filter" and "message" from a string.
+ * The Thinker model outputs reasoning first, then the final JSON answer.
+ * We want the final answer, which is typically the last JSON object.
  */
-function extractFirstJsonObject(text: string): any | null {
+function extractFinalJsonObject(text: string): Record<string, unknown> | null {
   const s = (text ?? "").trim();
   if (!s) return null;
 
-  // If whole string is JSON
+  // If whole string is valid JSON, use it
   try {
-    return JSON.parse(s);
+    const parsed = JSON.parse(s);
+    if (typeof parsed === "object" && parsed !== null) {
+      return parsed;
+    }
   } catch {
-    // continue
+    // continue to extraction
   }
 
-  // Find first '{' and brace-match
-  let start = s.indexOf("{");
-  while (start !== -1) {
+  // Find ALL JSON objects and return the last one that has "filter" or "message"
+  const jsonObjects: Record<string, unknown>[] = [];
+  let start = 0;
+
+  while (start < s.length) {
+    const openBrace = s.indexOf("{", start);
+    if (openBrace === -1) break;
+
     let depth = 0;
-    for (let i = start; i < s.length; i++) {
+    for (let i = openBrace; i < s.length; i++) {
       const ch = s[i];
       if (ch === "{") depth++;
       else if (ch === "}") depth--;
 
       if (depth === 0) {
-        const candidate = s.slice(start, i + 1);
+        const candidate = s.slice(openBrace, i + 1);
         try {
-          return JSON.parse(candidate);
+          const parsed = JSON.parse(candidate);
+          if (typeof parsed === "object" && parsed !== null) {
+            jsonObjects.push(parsed);
+          }
         } catch {
-          break;
+          // Not valid JSON, skip
         }
+        start = i + 1;
+        break;
       }
     }
-    start = s.indexOf("{", start + 1);
+
+    // If we never found a closing brace, move on
+    if (depth !== 0) {
+      start = openBrace + 1;
+    }
+  }
+
+  // Return the last JSON object that has "filter" or "message" key
+  // (this is most likely the final answer, not intermediate thinking)
+  for (let i = jsonObjects.length - 1; i >= 0; i--) {
+    const obj = jsonObjects[i];
+    if ("filter" in obj || "message" in obj) {
+      return obj;
+    }
+  }
+
+  // If none have filter/message, return the last one anyway
+  if (jsonObjects.length > 0) {
+    return jsonObjects[jsonObjects.length - 1];
   }
 
   return null;
 }
 
 /**
+ * Check if text looks like model "thinking" rather than a user-facing response
+ */
+function looksLikeThinking(text: string): boolean {
+  const thinkingPatterns = [
+    /^The user says:/i,
+    /^The user wants/i,
+    /^They want/i,
+    /^We need to/i,
+    /^Let me /i,
+    /^I need to/i,
+    /^I should/i,
+    /^Since we cannot/i,
+    /^The tool/i,
+    /^So we can/i,
+    /queryType/i,
+    /filter by cuisine/i,
+  ];
+
+  return thinkingPatterns.some((pattern) => pattern.test(text.trim()));
+}
+
+/**
  * Force the AI output into your strict schema:
  * { filter: {...}, message: string, places?: [...] }
  */
-function coerceToAppJson(raw: string): any {
-  const parsed = extractFirstJsonObject(raw);
+function coerceToAppJson(raw: string): {
+  filter: FilterShape;
+  message: string;
+  places?: Array<{ name: string; cuisine: string }>;
+} {
+  const parsed = extractFinalJsonObject(raw);
 
   // Default base structure
-  const base: any = {
+  const base = {
     filter: emptyFilter(),
-    message: "Okay — I've updated the map.",
+    message: "I'd be happy to help you find halal restaurants in Tokyo! What type of cuisine are you looking for?",
   };
 
   if (!parsed || typeof parsed !== "object") {
     const safeText = (raw ?? "").trim();
-    if (safeText && !safeText.toLowerCase().includes("respond with json")) {
+    // Only use raw text if it doesn't look like thinking
+    if (safeText && !looksLikeThinking(safeText) && safeText.length < 300) {
       base.message = safeText;
     }
     return base;
   }
 
-  const filter = parsed.filter && typeof parsed.filter === "object" ? parsed.filter : {};
-  const msg =
-    typeof parsed.message === "string"
-      ? parsed.message
-      : normalizeContent(parsed.message);
+  const filter =
+    parsed.filter && typeof parsed.filter === "object"
+      ? (parsed.filter as Record<string, unknown>)
+      : {};
+
+  let msg = "";
+  if (typeof parsed.message === "string") {
+    msg = parsed.message;
+  } else if (parsed.message != null) {
+    msg = normalizeContent(parsed.message);
+  }
+
+  // If the message still looks like thinking, replace it
+  if (!msg || looksLikeThinking(msg)) {
+    msg = base.message;
+  }
 
   return {
-    ...parsed,
-    filter: { ...emptyFilter(), ...filter },
-    message: msg || base.message,
+    filter: { ...emptyFilter(), ...(filter as Partial<FilterShape>) },
+    message: msg,
   };
 }
 
@@ -117,11 +186,14 @@ export async function POST(req: Request) {
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return NextResponse.json({
         role: "assistant",
-        content: JSON.stringify({ filter: emptyFilter(), message: "Ask me about halal food in Tokyo!" }),
+        content: JSON.stringify({
+          filter: emptyFilter(),
+          message: "Ask me about halal food in Tokyo!",
+        }),
       });
     }
 
-    const typedMessages = messages.map((msg: any) => ({
+    const typedMessages = messages.map((msg: Record<string, unknown>) => ({
       role: msg.role as "user" | "assistant" | "system",
       content: normalizeContent(msg.content),
     }));
@@ -134,7 +206,10 @@ export async function POST(req: Request) {
       return NextResponse.json(
         {
           role: "assistant",
-          content: JSON.stringify({ filter: emptyFilter(), message: "No response from AI." }),
+          content: JSON.stringify({
+            filter: emptyFilter(),
+            message: "No response from AI.",
+          }),
         },
         { status: 500 }
       );
@@ -151,7 +226,9 @@ export async function POST(req: Request) {
 
         let query = supabase
           .from("places")
-          .select("id, name, cuisine_subtype, cuisine_category, city, address");
+          .select(
+            "id, name, cuisine_subtype, cuisine_category, city, address, price_level"
+          );
 
         if (args.cuisine) {
           query = query.ilike("cuisine_subtype", `%${args.cuisine}%`);
@@ -167,51 +244,55 @@ export async function POST(req: Request) {
         // Tool result text (for the model)
         let toolResult = "";
         if (error) toolResult = `Error querying database: ${error.message}`;
-        else if (!data?.length) toolResult = "No results found matching that criteria.";
-        else if (args.queryType === "count") toolResult = `Found ${data.length} places.`;
+        else if (!data?.length)
+          toolResult = "No results found matching that criteria.";
+        else if (args.queryType === "count")
+          toolResult = `Found ${data.length} places.`;
         else {
           const top5 = data
             .slice(0, 5)
-            .map((p: any) => `Name: "${p.name}" (Cuisine: ${p.cuisine_subtype ?? p.cuisine_category ?? "Halal"})`)
-            .join("\n");
-          toolResult = `Found ${data.length} places. Here are the top ones:\n${top5}`;
+            .map(
+              (p: Record<string, unknown>) =>
+                `"${p.name}" - ${p.cuisine_subtype ?? p.cuisine_category ?? "Halal"}${p.price_level ? ` (${p.price_level})` : ""}`
+            )
+            .join(", ");
+          toolResult = `Found ${data.length} places. Top results: ${top5}`;
         }
 
         // 3) Second call with tool output
-const secondCallMessages = [
-  ...typedMessages,
-  {
-    role: "tool" as const,
-    tool_call_id: toolCall.id,
-    content: toolResult,
-  },
-];
+        const secondCallMessages = [
+          ...typedMessages,
+          {
+            role: "tool" as const,
+            tool_call_id: toolCall.id,
+            content: toolResult,
+          },
+        ];
 
-const finalCompletion = await chatWithApriel(secondCallMessages);
-const finalChoice = finalCompletion.choices?.[0];
+        const finalCompletion = await chatWithApriel(secondCallMessages);
+        const finalChoice = finalCompletion.choices?.[0];
 
-if (!finalChoice?.message) {
-  return NextResponse.json(
-    {
-      role: "assistant",
-      content: JSON.stringify({
-        filter: emptyFilter(),
-        message: "No response from AI.",
-      }),
-    },
-    { status: 500 }
-  );
-}
-
+        if (!finalChoice?.message) {
+          return NextResponse.json(
+            {
+              role: "assistant",
+              content: JSON.stringify({
+                filter: emptyFilter(),
+                message: "No response from AI.",
+              }),
+            },
+            { status: 500 }
+          );
+        }
 
         // 4) Coerce AI output to strict schema (strips thoughts)
         const coerced = coerceToAppJson(finalChoice.message.content ?? "");
 
         // 5) Inject places for UI convenience (always from DB, not hallucinated)
         if (data?.length) {
-          coerced.places = data.slice(0, 10).map((p: any) => ({
-            name: p.name,
-            cuisine: p.cuisine_subtype || p.cuisine_category || "Halal",
+          coerced.places = data.slice(0, 10).map((p: Record<string, unknown>) => ({
+            name: String(p.name),
+            cuisine: String(p.cuisine_subtype || p.cuisine_category || "Halal"),
           }));
         } else {
           coerced.places = [];
@@ -231,7 +312,7 @@ if (!finalChoice?.message) {
       role: "assistant",
       content: JSON.stringify(coerced),
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Apriel API Error:", error);
     return NextResponse.json(
       {
