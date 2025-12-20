@@ -2,6 +2,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { chatWithApriel } from '@/lib/together-client';
+import type { ChatCompletionMessageParam } from "together-ai/resources/chat/completions";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -15,8 +16,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Invalid messages format.' }, { status: 400 });
     }
 
+    // Cast messages to proper type
+    const typedMessages: ChatCompletionMessageParam[] = messages.map((msg: any) => ({
+      role: msg.role as "user" | "assistant" | "system",
+      content: msg.content,
+    }));
+
     // First call to Apriel
-    const completion = await chatWithApriel(messages);
+    const completion = await chatWithApriel(typedMessages);
     const choice = completion.choices[0];
     
     // Check if choice and message exist
@@ -72,16 +79,19 @@ export async function POST(req: Request) {
           }
         }
 
-        // Second call with tool result
-        const finalCompletion = await chatWithApriel([
-          ...messages,
-          message,
+        // Build messages for second call with proper typing
+        const secondCallMessages: ChatCompletionMessageParam[] = [
+          ...typedMessages,
+          message as ChatCompletionMessageParam,
           {
-            role: "tool",
+            role: "tool" as const,
             tool_call_id: toolCall.id,
             content: toolResult,
           },
-        ]);
+        ];
+
+        // Second call with tool result
+        const finalCompletion = await chatWithApriel(secondCallMessages);
 
         const finalChoice = finalCompletion.choices[0];
         if (!finalChoice || !finalChoice.message) {
