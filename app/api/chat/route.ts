@@ -1,21 +1,19 @@
+// app/api/chat/route.ts
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import Together from "together-ai";
 
-// Together client
+// -----------------------------
+// CONFIG
+// -----------------------------
 const together = new Together({
   apiKey: process.env.TOGETHER_API_KEY,
 });
 
-// Supabase client (same as your original)
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-/**
- * IMPORTANT: This is the ORIGINAL filter contract your frontend expects.
- * Do not change the keys.
- */
 type LegacyFilter = {
   cuisine_subtype: string | null;
   cuisine_category: string | null;
@@ -34,6 +32,11 @@ const EMPTY_FILTER: LegacyFilter = {
   favorites: null,
 };
 
+/**
+ * IMPORTANT: This prompt enforces the ORIGINAL frontend contract.
+ * Your chat.tsx expects `content` to be a JSON STRING with:
+ * { filter: LegacyFilter, message: string, places?: [...] }
+ */
 const SYSTEM_PROMPT = `
 You are a friendly, knowledgeable local guide helping Muslims find halal food in Tokyo.
 
@@ -69,13 +72,74 @@ B) FINAL ANSWER (for frontend):
   "message": string
 }
 
-IMPORTANT SEMANTICS (match frontend behavior):
+IMPORTANT SEMANTICS (must match frontend map filter):
 - If user mentions a LOCATION (Shinjuku/Shibuya/Asakusa/etc), put it in filter.keyword (NOT city).
 - If user asks "show/find" places, you MUST set filter values so the map updates.
 - If recommending a specific place name, set filter.keyword to that place name so the map isolates it.
+- For general requests like "spicy food" or "cheap lunch", set keyword to "Tokyo" unless the user specifies another area.
+
+Output valid JSON only. No Markdown.
 `;
 
-// Helper: call Together and force JSON object output
+// -----------------------------
+// HELPERS
+// -----------------------------
+function safeMsgContent(v: any) {
+  return typeof v === "string" ? v : "";
+}
+
+/**
+ * This is the key “restore old behavior” safeguard.
+ * Together/Llama sometimes forgets to set keyword; your map relies on it.
+ * We enforce keyword based on the user’s text, without touching frontend code.
+ */
+function enforceLegacyFilter(filter: any, userText: string): LegacyFilter {
+  const base: LegacyFilter = { ...EMPTY_FILTER, ...(filter || {}) };
+
+  if (base.keyword && String(base.keyword).trim() !== "") return base;
+
+  const text = (userText || "").toLowerCase();
+
+  // Add locations you care about (expand anytime)
+  const knownLocations = [
+    "shinjuku",
+    "shibuya",
+    "asakusa",
+    "ginza",
+    "ueno",
+    "akihabara",
+    "yotsuya",
+    "ikebukuro",
+    "harajuku",
+    "roppongi",
+    "tokyo",
+  ];
+
+  for (const loc of knownLocations) {
+    if (text.includes(loc)) {
+      base.keyword = loc; // keep original “keyword drives filtering” behavior
+      return base;
+    }
+  }
+
+  // If it's a generic “category” query, anchor to Tokyo (matches your old UX intent)
+  const looksLikeTokyoWide =
+    text.includes("spicy") ||
+    text.includes("cheap") ||
+    text.includes("lunch") ||
+    text.includes("ramen") ||
+    text.includes("yakiniku") ||
+    text.includes("sushi") ||
+    text.includes("curry") ||
+    text.includes("near me");
+
+  if (looksLikeTokyoWide) {
+    base.keyword = "Tokyo";
+  }
+
+  return base;
+}
+
 async function togetherJSON(messages: { role: "system" | "user" | "assistant"; content: string }[]) {
   const resp = await together.chat.completions.create({
     model: "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
@@ -87,10 +151,16 @@ async function togetherJSON(messages: { role: "system" | "user" | "assistant"; c
   return resp.choices?.[0]?.message?.content ?? "{}";
 }
 
-function safeMsgContent(v: any) {
-  return typeof v === "string" ? v : "";
+function toolResultToMessage(toolResult: string) {
+  return `TOOL_RESULT (queryDatabase):
+${toolResult}
+
+Now produce FINAL ANSWER JSON (format B).`;
 }
 
+// -----------------------------
+// ROUTE
+// -----------------------------
 export async function POST(req: Request) {
   try {
     if (!process.env.TOGETHER_API_KEY) {
@@ -101,12 +171,13 @@ export async function POST(req: Request) {
     }
 
     const { messages } = await req.json();
-
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return NextResponse.json({ error: "Invalid messages format." }, { status: 400 });
     }
 
-    // 1) First model call: decide tool vs final JSON
+    const lastUserText = safeMsgContent(messages[messages.length - 1]?.content);
+
+    // 1) First call: tool request OR final response
     const firstMessages = [
       { role: "system" as const, content: SYSTEM_PROMPT },
       ...messages.map((m: any) => ({
@@ -120,28 +191,28 @@ export async function POST(req: Request) {
     let firstParsed: any;
     try {
       firstParsed = JSON.parse(firstRaw);
-    } catch (e) {
-      // Return original-format error response so chat.tsx doesn't break
+    } catch {
+      // Keep frontend contract safe
       return NextResponse.json({
         role: "assistant",
         content: JSON.stringify({
-          filter: { ...EMPTY_FILTER },
+          filter: enforceLegacyFilter(EMPTY_FILTER, lastUserText),
           message: "I couldn't understand that. Try asking differently.",
         }),
       });
     }
 
-    // 2) If model asks for DB query, run it (replicates your old "tool calling" behavior)
+    // 2) Tool flow
     if (firstParsed?.tool === "queryDatabase") {
       const args = firstParsed.arguments || {};
       const queryType: "count" | "list" = args.queryType === "count" ? "count" : "list";
       const cuisine: string | null = typeof args.cuisine === "string" ? args.cuisine : null;
       const keyword: string | null = typeof args.keyword === "string" ? args.keyword : null;
 
-      // Same query style as your original code:
-      // - cuisine -> ilike cuisine_subtype
-      // - keyword -> OR search in name/address/city
-      let query = supabase.from("places").select("name, cuisine_subtype, cuisine_category, address, city");
+      // Execute DB query (same style as your original)
+      let query = supabase
+        .from("places")
+        .select("id, name, cuisine_subtype, cuisine_category, address, city, tags, price_level");
 
       if (cuisine) {
         query = query.ilike("cuisine_subtype", `%${cuisine}%`);
@@ -154,33 +225,29 @@ export async function POST(req: Request) {
 
       const { data, error } = await query;
 
-      // Build tool result string (fed back into model)
       let toolResult = "";
       if (error) {
         toolResult = `Error querying database: ${error.message}`;
       } else if (!data || data.length === 0) {
         toolResult = "No results found matching that criteria.";
+      } else if (queryType === "count") {
+        toolResult = `Found ${data.length} places.`;
       } else {
-        if (queryType === "count") {
-          toolResult = `Found ${data.length} places.`;
-        } else {
-          const top5 = data
-            .slice(0, 5)
-            .map((p: any) => `Name: "${p.name}" (Cuisine: ${p.cuisine_subtype || p.cuisine_category || "Unknown"})`)
-            .join("\n");
-          toolResult = `Found ${data.length} places. Here are the top ones:\n${top5}`;
-        }
+        const top5 = data
+          .slice(0, 5)
+          .map(
+            (p: any) =>
+              `Name: "${p.name}" (Cuisine: ${p.cuisine_subtype || p.cuisine_category || "Unknown"})`
+          )
+          .join("\n");
+        toolResult = `Found ${data.length} places. Here are the top ones:\n${top5}`;
       }
 
-      // 3) Second model call: force FINAL ANSWER JSON
+      // 3) Second call: final JSON (format B)
       const secondMessages = [
         ...firstMessages,
         { role: "assistant" as const, content: JSON.stringify(firstParsed) },
-        {
-          role: "assistant" as const,
-          content:
-            `TOOL_RESULT (queryDatabase):\n${toolResult}\n\nNow produce FINAL ANSWER JSON (format B).`,
-        },
+        { role: "assistant" as const, content: toolResultToMessage(toolResult) },
       ];
 
       const finalRaw = await togetherJSON(secondMessages);
@@ -191,18 +258,15 @@ export async function POST(req: Request) {
       } catch {
         finalParsed = {
           filter: {
+            ...EMPTY_FILTER,
             cuisine_subtype: cuisine,
-            cuisine_category: null,
-            price_level: null,
-            tag: null,
             keyword: keyword,
-            favorites: null,
-          } satisfies LegacyFilter,
+          },
           message: "I found results, but had trouble formatting the response.",
         };
       }
 
-      // Inject places list (your chat.tsx supports parsed.places)
+      // Inject places list for chat.tsx (clickable list)
       if (queryType === "list" && data && Array.isArray(data)) {
         finalParsed.places = data.slice(0, 10).map((p: any) => ({
           name: p.name,
@@ -210,25 +274,24 @@ export async function POST(req: Request) {
         }));
       }
 
-      // Ensure the filter keys are EXACTLY as frontend expects
-      finalParsed.filter = {
-        ...EMPTY_FILTER,
-        ...(finalParsed.filter || {}),
-      } as LegacyFilter;
+      // Enforce original filter semantics (keyword)
+      finalParsed.filter = enforceLegacyFilter(finalParsed.filter, lastUserText);
 
-      // IMPORTANT: return content as a STRING (exactly like before)
+      // IMPORTANT: return `content` as STRING for chat.tsx
       return NextResponse.json({
         role: "assistant",
         content: JSON.stringify(finalParsed),
       });
     }
 
-    // 4) No tool request: assume it already returned FINAL ANSWER JSON (format B)
-    // Normalize keys and return as string
+    // 4) Direct final answer (format B)
     const direct = {
-      filter: { ...EMPTY_FILTER, ...(firstParsed.filter || {}) } as LegacyFilter,
-      message: typeof firstParsed.message === "string" ? firstParsed.message : "Okay, I've updated the map.",
-      places: firstParsed.places, // if present
+      filter: enforceLegacyFilter(firstParsed.filter, lastUserText),
+      message:
+        typeof firstParsed.message === "string"
+          ? firstParsed.message
+          : "Okay, I've updated the map.",
+      places: firstParsed.places,
     };
 
     return NextResponse.json({
