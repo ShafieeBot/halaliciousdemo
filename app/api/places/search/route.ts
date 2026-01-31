@@ -13,24 +13,49 @@ export async function POST(req: Request) {
 
     // If empty filter => return all
     const hasAny = Object.values(filter).some(
-      (v: any) => v !== null && v !== undefined && 
+      (v: any) => v !== null && v !== undefined &&
       (Array.isArray(v) ? v.length > 0 : String(v).trim() !== '')
     );
-    
+
     if (!hasAny) {
       const { data, error } = await supabase.from('places').select('*').limit(2000);
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
       return NextResponse.json({ places: data ?? [] });
     }
 
-    // Handle search_terms from AI - loose OR search across all text fields
-    if (filter.search_terms && Array.isArray(filter.search_terms) && filter.search_terms.length > 0) {
-      const orConditions: string[] = [];
-      
+    // Build query with all filter options
+    let query = supabase.from('places').select('*');
+    const orConditions: string[] = [];
+
+    // Handle cuisine_subtype (e.g., "Yakiniku", "Ramen")
+    if (filter.cuisine_subtype) {
+      orConditions.push(`cuisine_subtype.ilike.%${filter.cuisine_subtype}%`);
+    }
+
+    // Handle cuisine_category (e.g., "Japanese", "Indian")
+    if (filter.cuisine_category) {
+      orConditions.push(`cuisine_category.ilike.%${filter.cuisine_category}%`);
+    }
+
+    // Handle keyword (e.g., "Shibuya", location or name search)
+    if (filter.keyword) {
+      orConditions.push(
+        `name.ilike.%${filter.keyword}%`,
+        `address.ilike.%${filter.keyword}%`,
+        `city.ilike.%${filter.keyword}%`
+      );
+    }
+
+    // Handle tag filter
+    if (filter.tag) {
+      orConditions.push(`tags.cs.{${filter.tag}}`);
+    }
+
+    // Handle search_terms array (legacy support)
+    if (filter.search_terms && Array.isArray(filter.search_terms)) {
       for (const term of filter.search_terms) {
         const t = String(term).trim();
         if (!t) continue;
-        
         orConditions.push(
           `name.ilike.%${t}%`,
           `address.ilike.%${t}%`,
@@ -39,23 +64,19 @@ export async function POST(req: Request) {
           `cuisine_category.ilike.%${t}%`
         );
       }
-
-      if (orConditions.length > 0) {
-        let q = supabase.from('places').select('*').or(orConditions.join(','));
-        
-        // Apply price filter if specified
-        if (filter.price_level) {
-          q = q.ilike('price_level', `%${filter.price_level}%`);
-        }
-
-        const { data, error } = await q.limit(2000);
-        if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-        return NextResponse.json({ places: data ?? [] });
-      }
     }
 
-    // Fallback: return all places
-    const { data, error } = await supabase.from('places').select('*').limit(2000);
+    // Apply OR conditions if any
+    if (orConditions.length > 0) {
+      query = query.or(orConditions.join(','));
+    }
+
+    // Apply price filter as AND condition
+    if (filter.price_level) {
+      query = query.ilike('price_level', `%${filter.price_level}%`);
+    }
+
+    const { data, error } = await query.limit(2000);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ places: data ?? [] });
 
