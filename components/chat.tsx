@@ -120,13 +120,13 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
         setLastFilter(parsed.filter);
       }
 
-      // Add message - only show places list if there's an actual filter change
+      // Add message - show places only for new searches (when filter changes)
       setMessages((prev) => [
         ...prev,
         {
           role: 'assistant',
           content: parsed.message,
-          showPlaces: hasFilter, // Only show places when filter changes
+          showPlaces: hasFilter, // Only show places list when there's a new filter
         },
       ]);
     } catch (e: any) {
