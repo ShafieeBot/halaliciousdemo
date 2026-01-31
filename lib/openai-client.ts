@@ -61,8 +61,7 @@ EXAMPLES:
 - User: "Spicy food in Tokyo" → filter: {tag: "spicy", keyword: "Tokyo"}, message: "Here are halal places with spicy food in Tokyo!"
 `;
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function chatWithAssistant(messages: Array<Record<string, any>>) {
+export async function chatWithAssistant(messages: Array<{ role: string; content: string }>) {
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [
@@ -77,36 +76,6 @@ export async function chatWithAssistant(messages: Array<Record<string, any>>) {
 
     // Enable JSON Mode for structured outputs
     response_format: { type: "json_object" },
-
-    // Tool/Function calling
-    tools: [
-      {
-        type: "function",
-        function: {
-          name: "queryDatabase",
-          description: "Query the halal restaurant database to count or find specific places.",
-          parameters: {
-            type: "object",
-            properties: {
-              queryType: {
-                type: "string",
-                enum: ["count", "list"],
-                description: "Whether to count matches or list specific restaurant names.",
-              },
-              cuisine: {
-                type: "string",
-                description: "Cuisine to filter by (e.g. Ramen, Sushi, Indian)",
-              },
-              keyword: {
-                type: "string",
-                description: "General keyword to search in name or tags (e.g. Shibuya, Spicy)",
-              },
-            },
-            required: ["queryType"],
-          },
-        },
-      },
-    ],
   });
 
   return response;
