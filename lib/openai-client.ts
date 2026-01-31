@@ -1,7 +1,7 @@
-import Together from "together-ai";
+import OpenAI from "openai";
 
-const together = new Together({
-  apiKey: process.env.TOGETHER_API_KEY,
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
 const SYSTEM_PROMPT = `
@@ -19,10 +19,10 @@ CRITICAL: After using the 'queryDatabase' tool, your final response MUST still b
 Response Format:
 {
   "filter": {
-    "cuisine_subtype": string | null, 
-    "cuisine_category": string | null, 
-    "price_level": string | null, 
-    "tag": string | null, 
+    "cuisine_subtype": string | null,
+    "cuisine_category": string | null,
+    "price_level": string | null,
+    "tag": string | null,
     "keyword": string | null,
     "favorites": boolean | null
   },
@@ -30,22 +30,22 @@ Response Format:
 }
 `;
 
-export async function chatWithApriel(messages: Array<{ role: string; content: string }>) {
-  const response = await together.chat.completions.create({
-    model: "ServiceNow-AI/Apriel-1.6-15b-Thinker",
+export async function chatWithAssistant(messages: Array<{ role: string; content: string }>) {
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
     messages: [
       {
         role: "system",
         content: SYSTEM_PROMPT,
       },
       ...messages,
-    ],
+    ] as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
     max_tokens: 1024,
     temperature: 0.7,
-    
+
     // Enable JSON Mode for structured outputs
     response_format: { type: "json_object" },
-    
+
     // Tool/Function calling
     tools: [
       {

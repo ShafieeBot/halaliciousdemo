@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { chatWithApriel } from '@/lib/together-client';
+import { chatWithAssistant } from '@/lib/openai-client';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -14,8 +14,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Invalid messages format.' }, { status: 400 });
     }
 
-    // First call to Apriel
-    const completion = await chatWithApriel(messages);
+    // First call to OpenAI
+    const completion = await chatWithAssistant(messages);
     const message = completion.choices[0].message;
 
     // Check if model wants to use tool
@@ -62,7 +62,7 @@ export async function POST(req: Request) {
         }
 
         // Second call with tool result
-        const finalCompletion = await chatWithApriel([
+        const finalCompletion = await chatWithAssistant([
           ...messages,
           message,
           {
@@ -104,7 +104,7 @@ export async function POST(req: Request) {
     });
 
   } catch (error: any) {
-    console.error('Apriel API Error:', error);
+    console.error('OpenAI API Error:', error);
     return NextResponse.json(
       { error: error.message || 'AI processing failed' },
       { status: 500 }
