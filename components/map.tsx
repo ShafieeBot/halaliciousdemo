@@ -8,9 +8,8 @@ import {
     InfoWindow,
     useMap
 } from '@vis.gl/react-google-maps';
-import { Database } from '@/lib/supabase';
-
-type Place = Database['public']['Tables']['places']['Row'];
+import { Place } from '@/lib/types';
+import { MAP_CONFIG } from '@/lib/constants';
 
 interface MapProps {
     places: Place[];
@@ -19,8 +18,7 @@ interface MapProps {
 }
 
 export default function RestaurantMap({ places, selectedPlace, onSelectPlace }: MapProps) {
-    // Default center (Tokyo)
-    const defaultCenter = { lat: 35.6895, lng: 139.6917 };
+    const defaultCenter = MAP_CONFIG.DEFAULT_CENTER;
     const [hoveredPlace, setHoveredPlace] = useState<Place | null>(null);
 
     const activePlace = hoveredPlace || selectedPlace;

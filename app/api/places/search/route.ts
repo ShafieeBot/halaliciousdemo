@@ -1,41 +1,33 @@
-// app/api/places/search/route.ts
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-const supabase = createClient(supabaseUrl, supabaseKey);
-
-// Sanitize user input to prevent injection attacks
-function sanitize(str: string | null | undefined): string | null {
-  if (!str || typeof str !== 'string') return null;
-  // Remove potential SQL/query injection characters and limit length
-  return str.replace(/[%_'"\\]/g, '').trim().slice(0, 100) || null;
-}
+import { supabase } from '@/lib/supabase';
+import { PlaceFilter, PlacesSearchResponse } from '@/lib/types';
+import { API_CONFIG } from '@/lib/constants';
+import { sanitizeInput, hasNonEmptyValues } from '@/lib/utils';
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const filter = body?.filter || {};
+    const filter: PlaceFilter = body?.filter || {};
 
     // If empty filter => return all
-    const hasAny = Object.values(filter).some(
-      (v: unknown) => v !== null && v !== undefined &&
-      (Array.isArray(v) ? v.length > 0 : String(v).trim() !== '')
-    );
+    if (!hasNonEmptyValues(filter)) {
+      const { data, error } = await supabase
+        .from('places')
+        .select('*')
+        .limit(API_CONFIG.MAX_PLACES_LIMIT);
 
-    if (!hasAny) {
-      const { data, error } = await supabase.from('places').select('*').limit(2000);
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-      return NextResponse.json({ places: data ?? [] });
+      if (error) {
+        return NextResponse.json({ error: error.message } as PlacesSearchResponse, { status: 500 });
+      }
+      return NextResponse.json({ places: data ?? [] } as PlacesSearchResponse);
     }
 
     // Build query with AND logic for different filter types
     let query = supabase.from('places').select('*');
 
     // Cuisine filter (cuisine_subtype OR cuisine_category) - applied as AND
-    const cuisineSubtype = sanitize(filter.cuisine_subtype);
-    const cuisineCategory = sanitize(filter.cuisine_category);
+    const cuisineSubtype = sanitizeInput(filter.cuisine_subtype);
+    const cuisineCategory = sanitizeInput(filter.cuisine_category);
 
     if (cuisineSubtype || cuisineCategory) {
       const cuisineConditions: string[] = [];
@@ -49,7 +41,7 @@ export async function POST(req: Request) {
     }
 
     // Location/keyword filter (name OR address OR city) - applied as AND with cuisine
-    const keyword = sanitize(filter.keyword);
+    const keyword = sanitizeInput(filter.keyword);
     if (keyword) {
       query = query.or(
         `name.ilike.%${keyword}%,address.ilike.%${keyword}%,city.ilike.%${keyword}%`
@@ -57,13 +49,13 @@ export async function POST(req: Request) {
     }
 
     // Tag filter - applied as AND
-    const tag = sanitize(filter.tag);
+    const tag = sanitizeInput(filter.tag);
     if (tag) {
       query = query.contains('tags', [tag]);
     }
 
     // Price filter - applied as AND
-    const priceLevel = sanitize(filter.price_level);
+    const priceLevel = sanitizeInput(filter.price_level);
     if (priceLevel) {
       query = query.ilike('price_level', `%${priceLevel}%`);
     }
@@ -72,7 +64,7 @@ export async function POST(req: Request) {
     if (filter.search_terms && Array.isArray(filter.search_terms) && filter.search_terms.length > 0) {
       const orConditions: string[] = [];
       for (const term of filter.search_terms) {
-        const t = sanitize(term);
+        const t = sanitizeInput(term);
         if (!t) continue;
         orConditions.push(
           `name.ilike.%${t}%`,
@@ -87,12 +79,18 @@ export async function POST(req: Request) {
       }
     }
 
-    const { data, error } = await query.limit(2000);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    return NextResponse.json({ places: data ?? [] });
+    const { data, error } = await query.limit(API_CONFIG.MAX_PLACES_LIMIT);
+
+    if (error) {
+      return NextResponse.json({ error: error.message } as PlacesSearchResponse, { status: 500 });
+    }
+    return NextResponse.json({ places: data ?? [] } as PlacesSearchResponse);
 
   } catch (e: unknown) {
     const error = e as Error;
-    return NextResponse.json({ error: error?.message || 'Unexpected server error' }, { status: 500 });
+    return NextResponse.json(
+      { error: error?.message || 'Unexpected server error' } as PlacesSearchResponse,
+      { status: 500 }
+    );
   }
 }

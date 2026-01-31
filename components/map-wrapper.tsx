@@ -1,15 +1,14 @@
 'use client';
 
 import { useState } from 'react';
-import { Database } from '@/lib/supabase';
 import { APIProvider } from '@vis.gl/react-google-maps';
 import RestaurantMap from '@/components/map';
 import ChatInterface from '@/components/chat';
 import PlaceDetailSidebar from '@/components/place-detail-sidebar';
 import FloatingMenu from '@/components/floating-menu';
 import FavoritesPanel from '@/components/favorites-panel';
-
-type Place = Database['public']['Tables']['places']['Row'];
+import { Place, PlaceFilter } from '@/lib/types';
+import { favorites } from '@/lib/storage';
 
 interface MapWrapperProps {
   initialPlaces: Place[];
@@ -27,7 +26,7 @@ export default function MapWrapper({ initialPlaces }: MapWrapperProps) {
    * - AI returns filter params for matching
    * - We POST to /api/places/search to query DB
    */
-  const handleFilter = async (filter: Record<string, unknown>) => {
+  const handleFilter = async (filter: PlaceFilter) => {
     // If filter is empty => reset to all places
     if (!filter || Object.keys(filter).length === 0) {
       setPlaces(initialPlaces);
@@ -37,15 +36,9 @@ export default function MapWrapper({ initialPlaces }: MapWrapperProps) {
 
     // Favorites: client-side (localStorage)
     if (filter.favorites) {
-      if (typeof window !== 'undefined') {
-        try {
-          const favorites = JSON.parse(localStorage.getItem('halal_favorites') || '[]');
-          const favPlaces = initialPlaces.filter((p) => favorites.includes(p.id));
-          setPlaces(favPlaces);
-        } catch {
-          setPlaces([]);
-        }
-      }
+      const favIds = favorites.getAll();
+      const favPlaces = initialPlaces.filter((p) => favIds.includes(p.id));
+      setPlaces(favPlaces);
       setSearchError(null);
       return;
     }

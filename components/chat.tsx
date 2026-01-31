@@ -2,29 +2,22 @@
 
 import { useState, useRef } from 'react';
 import { Send, Sparkles, Trash2, MapPin } from 'lucide-react';
-
-interface Place {
-  name: string;
-  cuisine_subtype?: string | null;
-  cuisine_category?: string | null;
-}
+import { Place, PlaceFilter, ChatMessage } from '@/lib/types';
+import { API_CONFIG, APP_INFO } from '@/lib/constants';
+import { hasNonEmptyValues, safeJsonParse } from '@/lib/utils';
 
 interface ChatInterfaceProps {
   places: Place[];
-  onFilterChange: (filter: Record<string, unknown>) => void;
+  onFilterChange: (filter: PlaceFilter) => void;
   onSelectPlace: (placeName: string) => void;
 }
-
-type ChatMsg = { role: 'user' | 'assistant'; content: string; showPlaces?: boolean };
-
-const REQUEST_TIMEOUT = 30000; // 30 seconds
 
 export default function ChatInterface({ places, onFilterChange, onSelectPlace }: ChatInterfaceProps) {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
-  const [messages, setMessages] = useState<ChatMsg[]>([]);
-  const [lastFilter, setLastFilter] = useState<Record<string, unknown>>({});
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [lastFilter, setLastFilter] = useState<PlaceFilter>({});
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const handleClear = () => {
@@ -39,10 +32,10 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
     onFilterChange({});
   };
 
-  const processMessage = async (messageMessages: typeof messages) => {
+  const processMessage = async (messageMessages: ChatMessage[]) => {
     // Create new AbortController for this request
     abortControllerRef.current = new AbortController();
-    const timeoutId = setTimeout(() => abortControllerRef.current?.abort(), REQUEST_TIMEOUT);
+    const timeoutId = setTimeout(() => abortControllerRef.current?.abort(), API_CONFIG.REQUEST_TIMEOUT);
 
     try {
       const response = await fetch('/api/chat', {
@@ -60,10 +53,8 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
       // Read raw text first so we can handle non-JSON server responses safely
       const rawText = await response.text();
 
-      let data: Record<string, unknown> | null = null;
-      try {
-        data = rawText ? JSON.parse(rawText) : null;
-      } catch {
+      const data: Record<string, unknown> = safeJsonParse(rawText, {});
+      if (Object.keys(data).length === 0 && rawText && rawText !== '{}') {
         console.error('API returned non-JSON response:', rawText);
         throw new Error('Server returned an invalid response.');
       }
@@ -90,30 +81,24 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
         throw new Error((data?.error as string) || `Failed to connect to AI service. (${response.status})`);
       }
 
-      /**
-       * Support BOTH API formats:
-       * OLD: { content: "{ \"filter\": {...}, \"message\": \"...\" }" }
-       * NEW: { filter: {...}, message: "..." }
-       */
-      let parsed: Record<string, unknown> | null = null;
+      // Parse response - support both formats
+      let parsed: Record<string, unknown> = {};
 
       // Old format: JSON string inside data.content
       if (typeof data?.content === 'string' && (data.content as string).trim()) {
-        try {
-          parsed = JSON.parse(data.content as string);
-        } catch {
+        parsed = safeJsonParse(data.content as string, {});
+        if (Object.keys(parsed).length === 0) {
           console.error('Failed to parse AI JSON string in data.content. Raw:', data.content);
-          parsed = null;
         }
       }
 
       // New format: already parsed object with filter/message
-      if (!parsed && data && typeof data === 'object') {
+      if (Object.keys(parsed).length === 0 && data && typeof data === 'object') {
         const hasFilterOrMessage = 'filter' in data || 'message' in data;
         if (hasFilterOrMessage) parsed = data;
       }
 
-      if (!parsed) {
+      if (Object.keys(parsed).length === 0) {
         console.warn('Empty/invalid AI response object from API:', data);
         setMessages((prev) => [
           ...prev,
@@ -123,15 +108,13 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
       }
 
       // Normalize shape
-      const filter = (parsed.filter || {}) as Record<string, unknown>;
+      const filter = (parsed.filter || {}) as PlaceFilter;
       const message = typeof parsed.message === 'string' && (parsed.message as string).trim()
         ? (parsed.message as string)
         : "Okay, I've updated the map.";
 
       // Check if filter has actual content (not empty)
-      const hasFilter = Object.values(filter).some(
-        (v) => v !== null && v !== undefined && String(v).trim() !== ''
-      );
+      const hasFilter = hasNonEmptyValues(filter);
 
       // Apply filter - map-wrapper will query and update places prop
       if (hasFilter) {
@@ -177,7 +160,7 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
     setInput('');
     setLoading(true);
 
-    const newMessages = [...messages, { role: 'user', content: userMessage } as const];
+    const newMessages: ChatMessage[] = [...messages, { role: 'user', content: userMessage }];
     setMessages(newMessages);
 
     await processMessage(newMessages);
@@ -185,7 +168,7 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
 
   const handleQuickQuestion = (question: string) => {
     if (loading || isRetrying) return;
-    const newMessages = [...messages, { role: 'user', content: question } as const];
+    const newMessages: ChatMessage[] = [...messages, { role: 'user', content: question }];
     setMessages(newMessages);
     setLoading(true);
     processMessage(newMessages);
@@ -197,8 +180,8 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
     <div className="flex flex-col h-full bg-gradient-to-b from-white to-gray-50 border-l border-gray-200 shadow-2xl w-96 z-50">
       <div className="p-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-white/90 to-blue-50/50 backdrop-blur-md z-10 sticky top-0">
         <div>
-          <h1 className="font-bold text-lg text-gray-900 leading-tight">Tokyo Halal Map</h1>
-          <p className="text-xs text-gray-500">Finding the best halal food in Japan.</p>
+          <h1 className="font-bold text-lg text-gray-900 leading-tight">{APP_INFO.NAME}</h1>
+          <p className="text-xs text-gray-500">{APP_INFO.DESCRIPTION}</p>
         </div>
         <div className="flex gap-2 items-center">
           <button
@@ -241,7 +224,7 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
         {messages.map((m, i) => {
           // For assistant messages with showPlaces, use the places prop (same as map)
           const displayPlaces = m.showPlaces
-            ? places.slice(0, 10).map((p) => ({
+            ? places.slice(0, API_CONFIG.MAX_DISPLAY_PLACES).map((p) => ({
                 name: p.name,
                 cuisine: p.cuisine_subtype || p.cuisine_category || 'Halal',
               }))
