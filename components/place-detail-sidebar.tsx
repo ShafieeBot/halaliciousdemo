@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useMapsLibrary } from '@vis.gl/react-google-maps';
 import { Database } from '@/lib/supabase';
@@ -38,13 +38,24 @@ export default function PlaceDetailSidebar({ place, onClose }: PlaceDetailSideba
     const [isFavorite, setIsFavorite] = useState(false);
 
     useEffect(() => {
-        if (displayPlace) {
-            const favorites = JSON.parse(localStorage.getItem('halal_favorites') || '[]');
-            setIsFavorite(favorites.includes(displayPlace.id));
+        if (displayPlace && typeof window !== 'undefined') {
+            try {
+                const favorites = JSON.parse(localStorage.getItem('halal_favorites') || '[]');
+                setIsFavorite(favorites.includes(displayPlace.id));
+            } catch {
+                setIsFavorite(false);
+            }
         }
     }, [displayPlace]);
 
-    // ... (existing code)
+    // Define navigatePhoto BEFORE the effect that uses it
+    const navigatePhoto = useCallback((direction: number) => {
+        if (selectedPhotoIndex === null || !details?.photos) return;
+        const newIndex = selectedPhotoIndex + direction;
+        if (newIndex >= 0 && newIndex < details.photos.length) {
+            setSelectedPhotoIndex(newIndex);
+        }
+    }, [selectedPhotoIndex, details?.photos]);
 
     // Keyboard navigation for lightbox
     useEffect(() => {
@@ -58,15 +69,7 @@ export default function PlaceDetailSidebar({ place, onClose }: PlaceDetailSideba
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [selectedPhotoIndex]);
-
-    const navigatePhoto = (direction: number) => {
-        if (selectedPhotoIndex === null || !details?.photos) return;
-        const newIndex = selectedPhotoIndex + direction;
-        if (newIndex >= 0 && newIndex < details.photos.length) {
-            setSelectedPhotoIndex(newIndex);
-        }
-    };
+    }, [selectedPhotoIndex, navigatePhoto]);
 
     useEffect(() => {
         if (place) {
@@ -111,16 +114,20 @@ export default function PlaceDetailSidebar({ place, onClose }: PlaceDetailSideba
     const isOpen = !!place; // controlled by prop
 
     const toggleFavorite = () => {
-        if (!displayPlace) return;
-        const favorites = JSON.parse(localStorage.getItem('halal_favorites') || '[]');
-        let newFavorites;
-        if (favorites.includes(displayPlace.id)) {
-            newFavorites = favorites.filter((id: any) => id !== displayPlace.id);
-        } else {
-            newFavorites = [...favorites, displayPlace.id];
+        if (!displayPlace || typeof window === 'undefined') return;
+        try {
+            const favorites = JSON.parse(localStorage.getItem('halal_favorites') || '[]');
+            let newFavorites;
+            if (favorites.includes(displayPlace.id)) {
+                newFavorites = favorites.filter((id: string) => id !== displayPlace.id);
+            } else {
+                newFavorites = [...favorites, displayPlace.id];
+            }
+            localStorage.setItem('halal_favorites', JSON.stringify(newFavorites));
+            setIsFavorite(!isFavorite);
+        } catch (e) {
+            console.error('Failed to update favorites:', e);
         }
-        localStorage.setItem('halal_favorites', JSON.stringify(newFavorites));
-        setIsFavorite(!isFavorite);
     };
 
     return (

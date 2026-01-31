@@ -6,6 +6,13 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+// Sanitize user input to prevent injection attacks
+function sanitize(str: string | null | undefined): string | null {
+  if (!str || typeof str !== 'string') return null;
+  // Remove potential SQL/query injection characters and limit length
+  return str.replace(/[%_'"\\]/g, '').trim().slice(0, 100) || null;
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
@@ -13,7 +20,7 @@ export async function POST(req: Request) {
 
     // If empty filter => return all
     const hasAny = Object.values(filter).some(
-      (v: any) => v !== null && v !== undefined &&
+      (v: unknown) => v !== null && v !== undefined &&
       (Array.isArray(v) ? v.length > 0 : String(v).trim() !== '')
     );
 
@@ -27,39 +34,45 @@ export async function POST(req: Request) {
     let query = supabase.from('places').select('*');
 
     // Cuisine filter (cuisine_subtype OR cuisine_category) - applied as AND
-    if (filter.cuisine_subtype || filter.cuisine_category) {
+    const cuisineSubtype = sanitize(filter.cuisine_subtype);
+    const cuisineCategory = sanitize(filter.cuisine_category);
+
+    if (cuisineSubtype || cuisineCategory) {
       const cuisineConditions: string[] = [];
-      if (filter.cuisine_subtype) {
-        cuisineConditions.push(`cuisine_subtype.ilike.%${filter.cuisine_subtype}%`);
+      if (cuisineSubtype) {
+        cuisineConditions.push(`cuisine_subtype.ilike.%${cuisineSubtype}%`);
       }
-      if (filter.cuisine_category) {
-        cuisineConditions.push(`cuisine_category.ilike.%${filter.cuisine_category}%`);
+      if (cuisineCategory) {
+        cuisineConditions.push(`cuisine_category.ilike.%${cuisineCategory}%`);
       }
       query = query.or(cuisineConditions.join(','));
     }
 
     // Location/keyword filter (name OR address OR city) - applied as AND with cuisine
-    if (filter.keyword) {
+    const keyword = sanitize(filter.keyword);
+    if (keyword) {
       query = query.or(
-        `name.ilike.%${filter.keyword}%,address.ilike.%${filter.keyword}%,city.ilike.%${filter.keyword}%`
+        `name.ilike.%${keyword}%,address.ilike.%${keyword}%,city.ilike.%${keyword}%`
       );
     }
 
     // Tag filter - applied as AND
-    if (filter.tag) {
-      query = query.contains('tags', [filter.tag]);
+    const tag = sanitize(filter.tag);
+    if (tag) {
+      query = query.contains('tags', [tag]);
     }
 
     // Price filter - applied as AND
-    if (filter.price_level) {
-      query = query.ilike('price_level', `%${filter.price_level}%`);
+    const priceLevel = sanitize(filter.price_level);
+    if (priceLevel) {
+      query = query.ilike('price_level', `%${priceLevel}%`);
     }
 
     // Handle search_terms array (legacy support) - loose OR search
     if (filter.search_terms && Array.isArray(filter.search_terms) && filter.search_terms.length > 0) {
       const orConditions: string[] = [];
       for (const term of filter.search_terms) {
-        const t = String(term).trim();
+        const t = sanitize(term);
         if (!t) continue;
         orConditions.push(
           `name.ilike.%${t}%`,
@@ -78,7 +91,8 @@ export async function POST(req: Request) {
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ places: data ?? [] });
 
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message || 'Unexpected server error' }, { status: 500 });
+  } catch (e: unknown) {
+    const error = e as Error;
+    return NextResponse.json({ error: error?.message || 'Unexpected server error' }, { status: 500 });
   }
 }

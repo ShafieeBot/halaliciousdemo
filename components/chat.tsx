@@ -1,62 +1,85 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { Send, Sparkles, Trash2, MapPin } from 'lucide-react';
 
+interface Place {
+  name: string;
+  cuisine_subtype?: string | null;
+  cuisine_category?: string | null;
+}
+
 interface ChatInterfaceProps {
-  places: any[];
-  onFilterChange: (filter: any) => void;
+  places: Place[];
+  onFilterChange: (filter: Record<string, unknown>) => void;
   onSelectPlace: (placeName: string) => void;
 }
 
-type PlaceListItem = { name: string; cuisine: string };
-
 type ChatMsg = { role: 'user' | 'assistant'; content: string; showPlaces?: boolean };
+
+const REQUEST_TIMEOUT = 30000; // 30 seconds
 
 export default function ChatInterface({ places, onFilterChange, onSelectPlace }: ChatInterfaceProps) {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [messages, setMessages] = useState<ChatMsg[]>([]);
-  const [lastFilter, setLastFilter] = useState<any>({});
+  const [lastFilter, setLastFilter] = useState<Record<string, unknown>>({});
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const handleClear = () => {
+    // Abort any pending request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
     setMessages([]);
     setLastFilter({});
+    setLoading(false);
+    setIsRetrying(false);
     onFilterChange({});
   };
 
   const processMessage = async (messageMessages: typeof messages) => {
+    // Create new AbortController for this request
+    abortControllerRef.current = new AbortController();
+    const timeoutId = setTimeout(() => abortControllerRef.current?.abort(), REQUEST_TIMEOUT);
+
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: messageMessages.map((m) => ({ role: m.role, content: m.content })), // cleanse places from history
+          messages: messageMessages.map((m) => ({ role: m.role, content: m.content })),
           context: { lastFilter },
         }),
+        signal: abortControllerRef.current.signal,
       });
+
+      clearTimeout(timeoutId);
 
       // Read raw text first so we can handle non-JSON server responses safely
       const rawText = await response.text();
 
-      let data: any = null;
+      let data: Record<string, unknown> | null = null;
       try {
         data = rawText ? JSON.parse(rawText) : null;
-      } catch (e) {
+      } catch {
         console.error('API returned non-JSON response:', rawText);
         throw new Error('Server returned an invalid response.');
       }
 
       // Handle 429 retry logic
       if (response.status === 429) {
-        const waitSeconds = data?.retryAfter || 10;
+        const waitSeconds = (data?.retryAfter as number) || 10;
 
         setMessages((prev) => [
           ...prev,
           { role: 'assistant', content: `Server overloaded. Retrying in ${waitSeconds}s...` },
         ]);
 
+        setIsRetrying(true);
         await new Promise((resolve) => setTimeout(resolve, waitSeconds * 1000));
+        setIsRetrying(false);
 
         setMessages((prev) => [...prev, { role: 'assistant', content: 'Retrying now...' }]);
         await processMessage(messageMessages);
@@ -64,25 +87,21 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
       }
 
       if (!response.ok) {
-        throw new Error(data?.error || `Failed to connect to AI service. (${response.status})`);
+        throw new Error((data?.error as string) || `Failed to connect to AI service. (${response.status})`);
       }
 
       /**
-       * ✅ Support BOTH API formats:
-       *
-       * OLD:
-       *   { content: "{ \"filter\": {...}, \"message\": \"...\" }" }
-       *
-       * NEW:
-       *   { filter: {...}, message: "..." }
+       * Support BOTH API formats:
+       * OLD: { content: "{ \"filter\": {...}, \"message\": \"...\" }" }
+       * NEW: { filter: {...}, message: "..." }
        */
-      let parsed: any = null;
+      let parsed: Record<string, unknown> | null = null;
 
       // Old format: JSON string inside data.content
-      if (typeof data?.content === 'string' && data.content.trim()) {
+      if (typeof data?.content === 'string' && (data.content as string).trim()) {
         try {
-          parsed = JSON.parse(data.content);
-        } catch (err) {
+          parsed = JSON.parse(data.content as string);
+        } catch {
           console.error('Failed to parse AI JSON string in data.content. Raw:', data.content);
           parsed = null;
         }
@@ -98,26 +117,26 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
         console.warn('Empty/invalid AI response object from API:', data);
         setMessages((prev) => [
           ...prev,
-          { role: 'assistant', content: "I didn’t get a response. Please try again." },
+          { role: 'assistant', content: "I didn't get a response. Please try again." },
         ]);
         return;
       }
 
       // Normalize shape
-      parsed.filter = parsed.filter || {};
-      parsed.message = typeof parsed.message === 'string' && parsed.message.trim()
-        ? parsed.message
+      const filter = (parsed.filter || {}) as Record<string, unknown>;
+      const message = typeof parsed.message === 'string' && (parsed.message as string).trim()
+        ? (parsed.message as string)
         : "Okay, I've updated the map.";
 
       // Check if filter has actual content (not empty)
-      const hasFilter = parsed.filter && Object.values(parsed.filter).some(
-        (v: any) => v !== null && v !== undefined && String(v).trim() !== ''
+      const hasFilter = Object.values(filter).some(
+        (v) => v !== null && v !== undefined && String(v).trim() !== ''
       );
 
       // Apply filter - map-wrapper will query and update places prop
       if (hasFilter) {
-        onFilterChange(parsed.filter);
-        setLastFilter(parsed.filter);
+        onFilterChange(filter);
+        setLastFilter(filter);
       }
 
       // Add message - show places only for new searches (when filter changes)
@@ -125,21 +144,34 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
         ...prev,
         {
           role: 'assistant',
-          content: parsed.message,
-          showPlaces: hasFilter, // Only show places list when there's a new filter
+          content: message,
+          showPlaces: hasFilter,
         },
       ]);
-    } catch (e: any) {
-      console.error(e);
-      setMessages((prev) => [...prev, { role: 'assistant', content: `Error: ${e.message}` }]);
+    } catch (e: unknown) {
+      const error = e as Error;
+      if (error.name === 'AbortError') {
+        setMessages((prev) => [
+          ...prev,
+          { role: 'assistant', content: 'Request timed out. Please try again.' },
+        ]);
+      } else {
+        console.error(error);
+        setMessages((prev) => [
+          ...prev,
+          { role: 'assistant', content: `Error: ${error.message || 'Something went wrong.'}` },
+        ]);
+      }
     } finally {
+      clearTimeout(timeoutId);
       setLoading(false);
+      setIsRetrying(false);
     }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || loading) return;
+    if (!input.trim() || loading || isRetrying) return;
 
     const userMessage = input;
     setInput('');
@@ -150,6 +182,16 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
 
     await processMessage(newMessages);
   };
+
+  const handleQuickQuestion = (question: string) => {
+    if (loading || isRetrying) return;
+    const newMessages = [...messages, { role: 'user', content: question } as const];
+    setMessages(newMessages);
+    setLoading(true);
+    processMessage(newMessages);
+  };
+
+  const isDisabled = loading || isRetrying;
 
   return (
     <div className="flex flex-col h-full bg-gradient-to-b from-white to-gray-50 border-l border-gray-200 shadow-2xl w-96 z-50">
@@ -185,13 +227,9 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
               ].map((question, i) => (
                 <button
                   key={i}
-                  onClick={() => {
-                    const newMessages = [...messages, { role: 'user', content: question } as const];
-                    setMessages(newMessages);
-                    setLoading(true);
-                    processMessage(newMessages);
-                  }}
-                  className="p-3 bg-blue-50 hover:bg-blue-100 text-blue-700 text-sm rounded-xl transition text-left w-full border border-blue-100 hover:border-blue-200"
+                  onClick={() => handleQuickQuestion(question)}
+                  disabled={isDisabled}
+                  className="p-3 bg-blue-50 hover:bg-blue-100 text-blue-700 text-sm rounded-xl transition text-left w-full border border-blue-100 hover:border-blue-200 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {question}
                 </button>
@@ -202,8 +240,8 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
 
         {messages.map((m, i) => {
           // For assistant messages with showPlaces, use the places prop (same as map)
-          const displayPlaces = m.showPlaces 
-            ? places.slice(0, 10).map((p: any) => ({
+          const displayPlaces = m.showPlaces
+            ? places.slice(0, 10).map((p) => ({
                 name: p.name,
                 cuisine: p.cuisine_subtype || p.cuisine_category || 'Halal',
               }))
@@ -245,7 +283,10 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
 
         {loading && (
           <div className="flex items-start">
-            <div className="bg-gray-100 text-gray-700 rounded-2xl px-4 py-2 text-sm">Thinking…</div>
+            <div className="bg-gray-100 text-gray-700 rounded-2xl px-4 py-2 text-sm flex items-center gap-2">
+              <div className="animate-spin rounded-full h-3 w-3 border-2 border-gray-400 border-t-transparent"></div>
+              {isRetrying ? 'Retrying...' : 'Thinking...'}
+            </div>
           </div>
         )}
       </div>
@@ -255,13 +296,14 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            className="flex-1 px-4 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-200 text-sm"
-            placeholder="Ask a question..."
+            disabled={isDisabled}
+            className="flex-1 px-4 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-200 text-sm disabled:bg-gray-50 disabled:cursor-not-allowed"
+            placeholder={isRetrying ? 'Please wait...' : 'Ask a question...'}
           />
           <button
             type="submit"
-            disabled={loading}
-            className="p-3 rounded-xl bg-blue-600 text-white hover:bg-blue-700 transition disabled:opacity-50"
+            disabled={isDisabled}
+            className="p-3 rounded-xl bg-blue-600 text-white hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Send className="w-4 h-4" />
           </button>

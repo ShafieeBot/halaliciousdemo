@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useMemo } from 'react';
 import { X, MapPin, Star } from 'lucide-react';
 import { Database } from '@/lib/supabase';
 
@@ -13,12 +13,15 @@ interface FavoritesPanelProps {
 }
 
 export default function FavoritesPanel({ places, onSelectPlace, onClose }: FavoritesPanelProps) {
-    const [favorites, setFavorites] = useState<Place[]>([]);
-
-    useEffect(() => {
-        const favIds = JSON.parse(localStorage.getItem('halal_favorites') || '[]');
-        const favPlaces = places.filter(p => favIds.includes(p.id));
-        setFavorites(favPlaces);
+    // Use useMemo instead of useState + useEffect to avoid cascading re-renders
+    const favorites = useMemo(() => {
+        if (typeof window === 'undefined') return [];
+        try {
+            const favIds = JSON.parse(localStorage.getItem('halal_favorites') || '[]');
+            return places.filter(p => favIds.includes(p.id));
+        } catch {
+            return [];
+        }
     }, [places]);
 
     return (
