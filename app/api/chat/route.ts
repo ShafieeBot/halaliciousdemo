@@ -82,10 +82,14 @@ export async function POST(req: Request) {
           }
         }
 
-        // Second call with tool result
+        // Second call with tool result - must include the full assistant message with tool_calls
         const finalCompletion = await chatWithAssistant([
           ...messages,
-          message,
+          {
+            role: "assistant",
+            content: message.content || null,
+            tool_calls: message.tool_calls,
+          },
           {
             role: "tool",
             tool_call_id: toolCall.id,

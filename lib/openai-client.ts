@@ -61,7 +61,8 @@ EXAMPLES:
 - User: "Spicy food in Tokyo" → filter: {tag: "spicy", keyword: "Tokyo"}, message: "Here are halal places with spicy food in Tokyo!"
 `;
 
-export async function chatWithAssistant(messages: Array<{ role: string; content: string }>) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function chatWithAssistant(messages: Array<Record<string, any>>) {
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [
