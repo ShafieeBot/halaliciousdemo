@@ -109,19 +109,24 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
         ? parsed.message
         : "Okay, I've updated the map.";
 
+      // Check if filter has actual content (not empty)
+      const hasFilter = parsed.filter && Object.values(parsed.filter).some(
+        (v: any) => v !== null && v !== undefined && String(v).trim() !== ''
+      );
+
       // Apply filter - map-wrapper will query and update places prop
-      if (parsed.filter) {
+      if (hasFilter) {
         onFilterChange(parsed.filter);
         setLastFilter(parsed.filter);
       }
 
-      // Add message with showPlaces flag - the render will use the places prop
+      // Add message - only show places list if there's an actual filter change
       setMessages((prev) => [
         ...prev,
         {
           role: 'assistant',
           content: parsed.message,
-          showPlaces: true, // Flag to render places from the places prop
+          showPlaces: hasFilter, // Only show places when filter changes
         },
       ]);
     } catch (e: any) {
