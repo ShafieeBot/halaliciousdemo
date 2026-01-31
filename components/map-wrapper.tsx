@@ -12,87 +12,98 @@ import FavoritesPanel from '@/components/favorites-panel';
 type Place = Database['public']['Tables']['places']['Row'];
 
 interface MapWrapperProps {
-    initialPlaces: Place[];
+  initialPlaces: Place[];
 }
 
 export default function MapWrapper({ initialPlaces }: MapWrapperProps) {
-    const [places, setPlaces] = useState<Place[]>(initialPlaces);
-    const [selectedPlace, setSelectedPlace] = useState<Place | null>(null);
-    const [showFavorites, setShowFavorites] = useState(false);
+  const [places, setPlaces] = useState<Place[]>(initialPlaces);
+  const [selectedPlace, setSelectedPlace] = useState<Place | null>(null);
+  const [showFavorites, setShowFavorites] = useState(false);
 
-    const handleFilter = (filter: any) => {
-        let result = initialPlaces;
+  /**
+   * ✅ AI-driven filtering:
+   * - AI returns search_terms for loose matching
+   * - We POST to /api/places/search to query DB
+   */
+  const handleFilter = async (filter: any) => {
+    // If filter is empty => reset to all places
+    if (!filter || Object.keys(filter).length === 0) {
+      setPlaces(initialPlaces);
+      return;
+    }
 
-        if (filter.cuisine_subtype) {
-            result = result.filter(p => p.cuisine_subtype?.toLowerCase().includes(filter.cuisine_subtype.toLowerCase()));
-        }
-        if (filter.cuisine_category) {
-            result = result.filter(p => p.cuisine_category?.toLowerCase().includes(filter.cuisine_category.toLowerCase()));
-        }
-        if (filter.price_level) {
-            result = result.filter(p => p.price_level && p.price_level.length <= filter.price_level.length);
-        }
-        if (filter.tag) {
-            result = result.filter(p => p.tags && p.tags.some(t => t.toLowerCase().includes(filter.tag.toLowerCase())));
-        }
-        if (filter.favorites) {
-            const favorites = JSON.parse(localStorage.getItem('halal_favorites') || '[]');
-            result = result.filter(p => favorites.includes(p.id));
-        }
+    // Favorites: client-side (localStorage)
+    if (filter.favorites) {
+      const favorites = JSON.parse(localStorage.getItem('halal_favorites') || '[]');
+      const favPlaces = initialPlaces.filter((p) => favorites.includes(p.id));
+      setPlaces(favPlaces);
+      return;
+    }
 
-        if (filter.keyword) {
-            const k = filter.keyword.toLowerCase();
-            result = result.filter(p =>
-                p.name.toLowerCase().includes(k) ||
-                p.cuisine_subtype?.toLowerCase().includes(k) ||
-                (p.cuisine_category && p.cuisine_category.toLowerCase().includes(k)) ||
-                (p.tags && p.tags.some(t => t.toLowerCase().includes(k))) ||
-                (p.address && p.address.toLowerCase().includes(k))
-            );
-        }
-        setPlaces(result);
-    };
+    // Query DB with AI-generated filter
+    try {
+      const res = await fetch('/api/places/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filter }),
+      });
 
-    const handleSelectPlaceByName = (placeName: string) => {
-        const place = initialPlaces.find(p => p.name === placeName);
-        if (place) {
-            setSelectedPlace(place);
-        }
-    };
+      const data = await res.json();
 
-    return (
-        <APIProvider apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || ''} libraries={['places']}>
-            <div className="flex h-screen w-full overflow-hidden">
-                <div className="flex-1 relative flex">
-                    <PlaceDetailSidebar
-                        place={selectedPlace}
-                        onClose={() => setSelectedPlace(null)}
-                    />
-                    <div className="flex-1 relative">
-                        <FloatingMenu onToggleFavorites={() => setShowFavorites(!showFavorites)} />
-                        {showFavorites && (
-                            <FavoritesPanel
-                                places={initialPlaces}
-                                onSelectPlace={(place) => {
-                                    setSelectedPlace(place);
-                                    setShowFavorites(false);
-                                }}
-                                onClose={() => setShowFavorites(false)}
-                            />
-                        )}
-                        <RestaurantMap
-                            places={places}
-                            selectedPlace={selectedPlace}
-                            onSelectPlace={setSelectedPlace}
-                        />
-                    </div>
-                </div>
-                <ChatInterface
-                    places={places}
-                    onFilterChange={handleFilter}
-                    onSelectPlace={handleSelectPlaceByName}
-                />
-            </div>
-        </APIProvider>
-    );
+      if (!res.ok) {
+        console.error('places/search failed:', data?.error || res.statusText);
+        return;
+      }
+
+      const newPlaces: Place[] = Array.isArray(data?.places) ? data.places : [];
+      setPlaces(newPlaces);
+
+      // Close sidebar if selected place is no longer visible
+      if (selectedPlace && !newPlaces.some((p) => p.id === selectedPlace.id)) {
+        setSelectedPlace(null);
+      }
+    } catch (e) {
+      console.error('handleFilter error:', e);
+    }
+  };
+
+  const handleSelectPlaceByName = (placeName: string) => {
+    // search in current places first (because places is now DB-driven)
+    const place = places.find((p) => p.name === placeName) || initialPlaces.find((p) => p.name === placeName);
+    if (place) setSelectedPlace(place);
+  };
+
+  return (
+    <APIProvider apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || ''} libraries={['places']}>
+      <div className="flex h-screen w-full overflow-hidden">
+        <div className="flex-1 relative flex">
+          <PlaceDetailSidebar place={selectedPlace} onClose={() => setSelectedPlace(null)} />
+
+          <div className="flex-1 relative">
+            <FloatingMenu onToggleFavorites={() => setShowFavorites(!showFavorites)} />
+
+            {showFavorites && (
+              <FavoritesPanel
+                places={initialPlaces}
+                onSelectPlace={(place) => {
+                  setSelectedPlace(place);
+                  setShowFavorites(false);
+                }}
+                onClose={() => setShowFavorites(false)}
+              />
+            )}
+
+            {/* ✅ Keep required MapProps exactly as your RestaurantMap expects */}
+            <RestaurantMap
+              places={places}
+              selectedPlace={selectedPlace}
+              onSelectPlace={setSelectedPlace}
+            />
+          </div>
+        </div>
+
+        <ChatInterface places={places} onFilterChange={handleFilter} onSelectPlace={handleSelectPlaceByName} />
+      </div>
+    </APIProvider>
+  );
 }

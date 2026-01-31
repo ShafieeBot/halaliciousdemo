@@ -8,10 +8,17 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 export async function POST(req: Request) {
   try {
-    const { messages } = await req.json();
-    
-    if (!messages || !Array.isArray(messages) || messages.length === 0) {
-      return NextResponse.json({ error: 'Invalid messages format.' }, { status: 400 });
+    const togetherKey = process.env.TOGETHER_API_KEY;
+    if (!togetherKey) {
+      return NextResponse.json(
+        { error: "Missing TOGETHER_API_KEY environment variable." },
+        { status: 500 }
+      );
+    }
+
+    const body = await req.json().catch(() => null);
+    if (!body || !Array.isArray(body.messages) || body.messages.length === 0) {
+      return NextResponse.json({ error: "Invalid messages format." }, { status: 400 });
     }
 
     // First call to OpenAI
@@ -97,16 +104,16 @@ export async function POST(req: Request) {
       }
     }
 
-    // No tool call - return direct response
     return NextResponse.json({
-      role: 'assistant',
-      content: message.content,
+      message: parsed.message || "Here's what I found!",
+      search_terms: Array.isArray(parsed.search_terms) ? parsed.search_terms : [],
+      price_level: parsed.price_level || null,
     });
 
   } catch (error: any) {
     console.error('OpenAI API Error:', error);
     return NextResponse.json(
-      { error: error.message || 'AI processing failed' },
+      { error: e?.message || "Unexpected server error." },
       { status: 500 }
     );
   }
