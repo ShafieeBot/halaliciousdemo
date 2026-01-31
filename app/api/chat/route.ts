@@ -8,10 +8,10 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 export async function POST(req: Request) {
   try {
-    const togetherKey = process.env.TOGETHER_API_KEY;
-    if (!togetherKey) {
+    const openaiKey = process.env.OPENAI_API_KEY;
+    if (!openaiKey) {
       return NextResponse.json(
-        { error: "Missing TOGETHER_API_KEY environment variable." },
+        { error: "Missing OPENAI_API_KEY environment variable." },
         { status: 500 }
       );
     }
@@ -21,6 +21,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid messages format." }, { status: 400 });
     }
 
+    const { messages } = body;
+
     // First call to OpenAI
     const completion = await chatWithAssistant(messages);
     const message = completion.choices[0].message;
@@ -28,7 +30,7 @@ export async function POST(req: Request) {
     // Check if model wants to use tool
     if (message.tool_calls && message.tool_calls.length > 0) {
       const toolCall = message.tool_calls[0];
-      
+
       if (toolCall.function.name === 'queryDatabase') {
         const args = JSON.parse(toolCall.function.arguments);
         console.log('Using queryDatabase tool:', args);
@@ -80,18 +82,18 @@ export async function POST(req: Request) {
         ]);
 
         let finalContent = finalCompletion.choices[0].message.content || "{}";
-        
+
         // Inject actual place data into response
         try {
           const parsed = JSON.parse(finalContent);
-          
+
           if (args.queryType === 'list' && data) {
             parsed.places = data.slice(0, 10).map((p: any) => ({
               name: p.name,
               cuisine: p.cuisine_subtype,
             }));
           }
-          
+
           finalContent = JSON.stringify(parsed);
         } catch (e) {
           console.error("Error injecting places into response", e);
@@ -104,16 +106,24 @@ export async function POST(req: Request) {
       }
     }
 
+    // No tool call - return direct response
+    const content = message.content || "{}";
+    let parsed;
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      parsed = { message: content, filter: {} };
+    }
+
     return NextResponse.json({
-      message: parsed.message || "Here's what I found!",
-      search_terms: Array.isArray(parsed.search_terms) ? parsed.search_terms : [],
-      price_level: parsed.price_level || null,
+      role: 'assistant',
+      content: JSON.stringify(parsed),
     });
 
   } catch (error: any) {
     console.error('OpenAI API Error:', error);
     return NextResponse.json(
-      { error: e?.message || "Unexpected server error." },
+      { error: error?.message || "Unexpected server error." },
       { status: 500 }
     );
   }
