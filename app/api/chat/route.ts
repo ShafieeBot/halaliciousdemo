@@ -29,9 +29,9 @@ export async function POST(req: Request) {
 
     // Check if model wants to use tool
     if (message.tool_calls && message.tool_calls.length > 0) {
-      const toolCall = message.tool_calls[0];
+      const toolCall = message.tool_calls[0] as any;
 
-      if (toolCall.function.name === 'queryDatabase') {
+      if (toolCall.function?.name === 'queryDatabase') {
         const args = JSON.parse(toolCall.function.arguments);
         console.log('Using queryDatabase tool:', args);
 
