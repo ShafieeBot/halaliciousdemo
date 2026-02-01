@@ -35,8 +35,8 @@ export default function RestaurantMap({ places, selectedPlace, onSelectPlace }: 
         }
 
         // At low zoom, prioritize certified, then muslim-friendly, limit total
-        const certified = places.filter(p => p.halal_status === 'Certified');
-        const muslimFriendly = places.filter(p => p.halal_status === 'Muslim Friendly');
+        const certified = places.filter(p => p.halal_status?.toLowerCase().includes('fully'));
+        const muslimFriendly = places.filter(p => p.halal_status?.toLowerCase().includes('muslim'));
 
         // Combine and limit
         const combined = [...certified, ...muslimFriendly];

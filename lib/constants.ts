@@ -41,9 +41,10 @@ export const APP_INFO = {
 } as const;
 
 // Halal status configuration - single source of truth for pin colors and labels
+// Database values: "Fully Halal", "Muslim-Friendly", null/empty
 export const HALAL_STATUS = {
   CERTIFIED: {
-    value: 'Certified',
+    value: 'Fully Halal',  // Must match database value
     label: 'Halal Certified',
     color: '#10B981',
     borderColor: '#059669',
@@ -51,7 +52,7 @@ export const HALAL_STATUS = {
     confidenceBoost: 40,
   },
   MUSLIM_FRIENDLY: {
-    value: 'Muslim Friendly',
+    value: 'Muslim-Friendly',  // Must match database value
     label: 'Muslim Friendly',
     color: '#3B82F6',
     borderColor: '#2563EB',
@@ -72,7 +73,7 @@ export const HALAL_STATUS = {
 export function getHalalStatusConfig(status: string | null | undefined) {
   if (!status) return HALAL_STATUS.UNVERIFIED;
   const normalized = status.toLowerCase();
-  if (normalized.includes('certified')) return HALAL_STATUS.CERTIFIED;
+  if (normalized.includes('fully') || normalized.includes('certified')) return HALAL_STATUS.CERTIFIED;
   if (normalized.includes('muslim') || normalized.includes('friendly')) return HALAL_STATUS.MUSLIM_FRIENDLY;
   return HALAL_STATUS.UNVERIFIED;
 }

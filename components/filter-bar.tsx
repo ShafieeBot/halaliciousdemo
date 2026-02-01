@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { X, Utensils, Shield, Clock, Wine } from 'lucide-react';
 import { PlaceFilter } from '@/lib/types';
+import { HALAL_STATUS } from '@/lib/constants';
 
 interface FilterBarProps {
   activeFilters: PlaceFilter;
@@ -62,11 +63,11 @@ export default function FilterBar({ activeFilters, onFilterChange }: FilterBarPr
   };
 
   return (
-    <div className="absolute top-16 left-4 right-4 z-10 flex items-center gap-2 flex-wrap">
+    <div className="absolute top-16 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 flex-wrap justify-center max-w-[90vw] md:max-w-none">
       {/* Halal Certified Only */}
       <FilterChip
-        active={isFilterActive('halal_status', 'Certified')}
-        onClick={() => toggleFilter('halal_status' as keyof PlaceFilter, 'Certified')}
+        active={isFilterActive('halal_status', HALAL_STATUS.CERTIFIED.value)}
+        onClick={() => toggleFilter('halal_status' as keyof PlaceFilter, HALAL_STATUS.CERTIFIED.value)}
         icon={<Shield className="w-3.5 h-3.5" />}
         label="Certified Only"
         color="green"
