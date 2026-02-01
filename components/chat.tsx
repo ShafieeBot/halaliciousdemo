@@ -39,12 +39,21 @@ export default function ChatInterface({ places, placesLoading, onFilterChange, o
     const timeoutId = setTimeout(() => abortControllerRef.current?.abort(), API_CONFIG.REQUEST_TIMEOUT);
 
     try {
+      // Include current places context for follow-up questions
+      const placesContext = places.slice(0, API_CONFIG.MAX_DISPLAY_PLACES).map((p) => ({
+        name: p.name,
+        cuisine: p.cuisine_subtype || p.cuisine_category,
+        city: p.city,
+        rating: p.rating,
+        price_level: p.price_level,
+      }));
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: messageMessages.map((m) => ({ role: m.role, content: m.content })),
-          context: { lastFilter },
+          context: { lastFilter, currentPlaces: placesContext },
         }),
         signal: abortControllerRef.current.signal,
       });

@@ -21,10 +21,21 @@ export async function POST(req: Request) {
       );
     }
 
-    const { messages } = body;
+    const { messages, context } = body;
+
+    // Build context message if we have current places
+    let contextMessage = '';
+    if (context?.currentPlaces && Array.isArray(context.currentPlaces) && context.currentPlaces.length > 0) {
+      const placesList = context.currentPlaces
+        .map((p: { name: string; cuisine?: string; city?: string; rating?: number; price_level?: string }, i: number) =>
+          `${i + 1}. ${p.name} (${p.cuisine || 'Halal'}${p.city ? `, ${p.city}` : ''}${p.rating ? `, Rating: ${p.rating}` : ''}${p.price_level ? `, Price: ${p.price_level}` : ''})`
+        )
+        .join('\n');
+      contextMessage = `\n\nCURRENT SEARCH RESULTS (use these for follow-up questions):\n${placesList}`;
+    }
 
     // Call OpenAI - it returns JSON with filter and message
-    const completion = await chatWithAssistant(messages);
+    const completion = await chatWithAssistant(messages, contextMessage);
     const content = completion.choices[0].message.content || "{}";
 
     // Parse the JSON response

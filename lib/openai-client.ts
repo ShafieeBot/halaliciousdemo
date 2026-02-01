@@ -61,13 +61,15 @@ EXAMPLES:
 - User: "Spicy food in Tokyo" → filter: {tag: "spicy", keyword: "Tokyo"}, message: "Here are halal places with spicy food in Tokyo!"
 `;
 
-export async function chatWithAssistant(messages: Array<{ role: string; content: string }>) {
+export async function chatWithAssistant(messages: Array<{ role: string; content: string }>, contextMessage?: string) {
+  const systemContent = SYSTEM_PROMPT + (contextMessage || '');
+
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [
       {
         role: "system",
-        content: SYSTEM_PROMPT,
+        content: systemContent,
       },
       ...messages,
     ] as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
