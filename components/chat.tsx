@@ -1,10 +1,12 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { Send, Sparkles, Trash2, MapPin } from 'lucide-react';
+import { Send, Sparkles, Trash2, MapPin, Lock } from 'lucide-react';
 import { Place, PlaceFilter, ChatMessage } from '@/lib/types';
 import { API_CONFIG, APP_INFO } from '@/lib/constants';
 import { hasNonEmptyValues, safeJsonParse } from '@/lib/utils';
+import { useAuth } from '@/contexts/auth-context';
+import AuthModal from './auth-modal';
 
 interface PlaceWithRating extends Place {
   google_rating?: number;
@@ -25,7 +27,10 @@ export default function ChatInterface({ places, placesWithRatings, placesLoading
   const [isRetrying, setIsRetrying] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [lastFilter, setLastFilter] = useState<PlaceFilter>({});
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  const { user, isLoading: authLoading } = useAuth();
 
   const handleClear = () => {
     // Abort any pending request
@@ -181,6 +186,19 @@ export default function ChatInterface({ places, placesWithRatings, placesLoading
     e.preventDefault();
     if (!input.trim() || loading || isRetrying) return;
 
+    // Check if user is authenticated
+    if (!user) {
+      const userMessage = input;
+      setInput('');
+      setMessages((prev) => [
+        ...prev,
+        { role: 'user', content: userMessage },
+        { role: 'assistant', content: 'Please create an account or sign in to use the AI chat feature. Click the button below to get started!' },
+      ]);
+      setShowAuthModal(true);
+      return;
+    }
+
     const userMessage = input;
     setInput('');
     setLoading(true);
@@ -193,15 +211,28 @@ export default function ChatInterface({ places, placesWithRatings, placesLoading
 
   const handleQuickQuestion = (question: string) => {
     if (loading || isRetrying) return;
+
+    // Check if user is authenticated
+    if (!user) {
+      setMessages((prev) => [
+        ...prev,
+        { role: 'user', content: question },
+        { role: 'assistant', content: 'Please create an account or sign in to use the AI chat feature. Click the button below to get started!' },
+      ]);
+      setShowAuthModal(true);
+      return;
+    }
+
     const newMessages: ChatMessage[] = [...messages, { role: 'user', content: question }];
     setMessages(newMessages);
     setLoading(true);
     processMessage(newMessages);
   };
 
-  const isDisabled = loading || isRetrying;
+  const isDisabled = loading || isRetrying || authLoading;
 
   return (
+    <>
     <div className="flex flex-col h-full bg-gradient-to-b from-white to-gray-50 border-l border-gray-200 shadow-2xl w-96 z-50">
       <div className="p-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-white/90 to-blue-50/50 backdrop-blur-md z-10 sticky top-0">
         <div>
@@ -221,6 +252,22 @@ export default function ChatInterface({ places, placesWithRatings, placesLoading
           </div>
         </div>
       </div>
+
+      {/* Auth Status Banner */}
+      {!authLoading && !user && (
+        <div className="px-4 py-2 bg-amber-50 border-b border-amber-100 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-amber-700 text-xs">
+            <Lock className="w-3.5 h-3.5" />
+            <span>Sign in to use AI chat</span>
+          </div>
+          <button
+            onClick={() => setShowAuthModal(true)}
+            className="text-xs font-medium text-amber-700 hover:text-amber-800 underline"
+          >
+            Sign In
+          </button>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.length === 0 && (
@@ -380,5 +427,9 @@ export default function ChatInterface({ places, placesWithRatings, placesLoading
         </div>
       </form>
     </div>
+
+    {/* Auth Modal */}
+    <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
+    </>
   );
 }
