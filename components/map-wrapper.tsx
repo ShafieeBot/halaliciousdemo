@@ -7,6 +7,7 @@ import ChatInterface from '@/components/chat';
 import PlaceDetailSidebar from '@/components/place-detail-sidebar';
 import FloatingMenu from '@/components/floating-menu';
 import FavoritesPanel from '@/components/favorites-panel';
+import MoreMenuPanel from '@/components/more-menu-panel';
 import { Place, PlaceFilter } from '@/lib/types';
 import { favorites } from '@/lib/storage';
 
@@ -24,6 +25,7 @@ export default function MapWrapper({ initialPlaces }: MapWrapperProps) {
   const [places, setPlaces] = useState<Place[]>(initialPlaces);
   const [selectedPlace, setSelectedPlace] = useState<Place | null>(null);
   const [showFavorites, setShowFavorites] = useState(false);
+  const [showMore, setShowMore] = useState(false);
   const [isFiltering, setIsFiltering] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
 
@@ -150,7 +152,16 @@ export default function MapWrapper({ initialPlaces }: MapWrapperProps) {
           <PlaceDetailSidebar place={selectedPlace} onClose={() => setSelectedPlace(null)} />
 
           <div className="flex-1 relative">
-            <FloatingMenu onToggleFavorites={() => setShowFavorites(!showFavorites)} />
+            <FloatingMenu
+              onToggleFavorites={() => {
+                setShowFavorites(!showFavorites);
+                setShowMore(false);
+              }}
+              onToggleMore={() => {
+                setShowMore(!showMore);
+                setShowFavorites(false);
+              }}
+            />
 
             {showFavorites && (
               <FavoritesPanel
@@ -161,6 +172,10 @@ export default function MapWrapper({ initialPlaces }: MapWrapperProps) {
                 }}
                 onClose={() => setShowFavorites(false)}
               />
+            )}
+
+            {showMore && (
+              <MoreMenuPanel onClose={() => setShowMore(false)} />
             )}
 
             {/* Error Toast */}
