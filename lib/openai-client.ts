@@ -52,15 +52,16 @@ OUTPUT JSON SCHEMA:
     "keyword": string | null,
     "favorites": boolean | null
   },
-  "message": string
+  "message": string,
+  "recommended_place": string | null  // The EXACT name of a place you're recommending (for follow-ups)
 }
 
 EXAMPLES:
 - User: "Find ramen in Shinjuku" → filter: {cuisine_subtype: "Ramen", keyword: "Shinjuku"}, message: "Here are halal ramen places in Shinjuku!"
 - User: "Best ramen in Shinjuku" → filter: {cuisine_subtype: "Ramen", keyword: "Shinjuku"}, message: "Here are halal ramen spots in Shinjuku!"
 - User: "Halal yakiniku near Shibuya" → filter: {cuisine_subtype: "Yakiniku", keyword: "Shibuya"}, message: "Here are halal yakiniku restaurants near Shibuya!"
-- User: "Which is the best rated?" → filter: {}, message: "Based on Google reviews, [highest rated place name] has the highest rating at [X]/5 with [N] reviews!"
-- User: "Tell me more about the first one" → filter: {}, message: "[Name of first place] is located in [city]. Click on it to see photos, reviews, and more details!"
+- User: "Which is the best rated?" → filter: {}, message: "Based on Google reviews, [highest rated place name] has the highest rating at [X]/5 with [N] reviews!", recommended_place: "[exact name of highest rated place]"
+- User: "Tell me more about the first one" → filter: {}, message: "[Name of first place] is located in [city]. Click on it to see photos, reviews, and more details!", recommended_place: "[exact name of first place]"
 - User: "Any cheap options?" → filter: {price_level: "$"}, message: "Here are some budget-friendly halal options!"
 - User: "Spicy food in Tokyo" → filter: {tag: "spicy", keyword: "Tokyo"}, message: "Here are halal places with spicy food in Tokyo!"
 `;

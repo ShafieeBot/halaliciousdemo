@@ -135,6 +135,7 @@ export default function ChatInterface({ places, placesWithRatings, placesLoading
       const message = typeof parsed.message === 'string' && (parsed.message as string).trim()
         ? (parsed.message as string)
         : "Okay, I've updated the map.";
+      const recommendedPlace = typeof parsed.recommended_place === 'string' ? parsed.recommended_place : undefined;
 
       // Check if filter has actual content (not empty)
       const hasFilter = hasNonEmptyValues(filter);
@@ -152,6 +153,7 @@ export default function ChatInterface({ places, placesWithRatings, placesLoading
           role: 'assistant',
           content: message,
           showPlaces: hasFilter,
+          recommendedPlace: recommendedPlace,
         },
       ]);
     } catch (e: unknown) {
@@ -255,6 +257,12 @@ export default function ChatInterface({ places, placesWithRatings, placesLoading
               }))
             : [];
 
+          // Find recommended place from placesWithRatings for follow-up answers
+          const recommendedPlaceData = m.recommendedPlace
+            ? placesWithRatings.find((p) => p.name === m.recommendedPlace) ||
+              places.find((p) => p.name === m.recommendedPlace)
+            : null;
+
           return (
             <div key={i} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
               <div
@@ -264,6 +272,35 @@ export default function ChatInterface({ places, placesWithRatings, placesLoading
               >
                 {m.content}
               </div>
+
+              {/* Show recommended place card for follow-up answers */}
+              {recommendedPlaceData && !m.showPlaces && (
+                <div className="mt-2 w-[85%]">
+                  <button
+                    onClick={() => onSelectPlace(recommendedPlaceData.name)}
+                    className="w-full text-left p-3 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl transition flex items-start gap-3 group"
+                  >
+                    <div className="bg-blue-100 p-2 rounded-lg group-hover:bg-blue-200 transition">
+                      <MapPin className="w-5 h-5 text-blue-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-semibold text-gray-900 truncate">{recommendedPlaceData.name}</div>
+                      <div className="text-xs text-gray-600">
+                        {recommendedPlaceData.cuisine_subtype || recommendedPlaceData.cuisine_category || 'Halal'}
+                        {recommendedPlaceData.city && ` • ${recommendedPlaceData.city}`}
+                      </div>
+                      {(recommendedPlaceData as PlaceWithRating).google_rating && (
+                        <div className="text-xs text-yellow-600 font-medium mt-1">
+                          ⭐ {(recommendedPlaceData as PlaceWithRating).google_rating}/5
+                          {(recommendedPlaceData as PlaceWithRating).google_ratings_total &&
+                            ` (${(recommendedPlaceData as PlaceWithRating).google_ratings_total} reviews)`}
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-blue-500 text-xs font-medium self-center">View →</div>
+                  </button>
+                </div>
+              )}
 
               {/* Show loading state while places are being fetched */}
               {m.showPlaces && placesLoading && (

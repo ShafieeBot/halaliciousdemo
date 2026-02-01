@@ -14,6 +14,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   showPlaces?: boolean;
+  recommendedPlace?: string; // Exact name of a recommended place to show as clickable
 }
 
 // Filter types for search
@@ -33,6 +34,7 @@ export interface ChatAPIResponse {
   content?: string;
   filter?: PlaceFilter;
   message?: string;
+  recommended_place?: string;
   error?: string;
 }
 
