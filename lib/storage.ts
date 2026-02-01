@@ -2,7 +2,7 @@
  * Safe localStorage utilities with SSR support
  */
 
-import { STORAGE_KEYS } from './constants';
+import { STORAGE_KEYS, GUEST_CONFIG } from './constants';
 
 /**
  * Check if we're in a browser environment
@@ -82,6 +82,77 @@ export const favorites = {
     } else {
       this.add(placeId);
       return true;
+    }
+  },
+};
+
+// Guest query tracking for unauthenticated users
+export const guestQueries = {
+  /**
+   * Get the number of queries used by guest
+   */
+  getUsedCount(): number {
+    return getStorageItem<number>(STORAGE_KEYS.GUEST_QUERIES_USED, 0);
+  },
+
+  /**
+   * Check if guest has remaining free queries
+   */
+  hasRemainingQueries(): boolean {
+    return this.getUsedCount() < GUEST_CONFIG.MAX_FREE_QUERIES;
+  },
+
+  /**
+   * Get remaining query count
+   */
+  getRemainingCount(): number {
+    return Math.max(0, GUEST_CONFIG.MAX_FREE_QUERIES - this.getUsedCount());
+  },
+
+  /**
+   * Increment the used query count
+   */
+  incrementUsed(): void {
+    const current = this.getUsedCount();
+    setStorageItem(STORAGE_KEYS.GUEST_QUERIES_USED, current + 1);
+  },
+
+  /**
+   * Reset guest query count (for testing or admin purposes)
+   */
+  reset(): void {
+    setStorageItem(STORAGE_KEYS.GUEST_QUERIES_USED, 0);
+  },
+};
+
+// Map position persistence
+export const mapPosition = {
+  /**
+   * Save current map position
+   */
+  save(center: { lat: number; lng: number }, zoom: number): void {
+    setStorageItem(STORAGE_KEYS.LAST_MAP_POSITION, { center, zoom });
+  },
+
+  /**
+   * Get saved map position
+   */
+  get(): { center: { lat: number; lng: number }; zoom: number } | null {
+    return getStorageItem<{ center: { lat: number; lng: number }; zoom: number } | null>(
+      STORAGE_KEYS.LAST_MAP_POSITION,
+      null
+    );
+  },
+
+  /**
+   * Clear saved position
+   */
+  clear(): void {
+    if (!isBrowser) return;
+    try {
+      localStorage.removeItem(STORAGE_KEYS.LAST_MAP_POSITION);
+    } catch {
+      // Ignore errors
     }
   },
 };

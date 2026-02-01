@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useRef } from 'react';
-import { Send, Sparkles, Trash2, MapPin, Lock } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { Send, Sparkles, Trash2, MapPin, MessageCircle } from 'lucide-react';
 import { Place, PlaceFilter, ChatMessage } from '@/lib/types';
-import { API_CONFIG, APP_INFO } from '@/lib/constants';
+import { API_CONFIG, APP_INFO, GUEST_CONFIG } from '@/lib/constants';
 import { hasNonEmptyValues, safeJsonParse } from '@/lib/utils';
+import { guestQueries } from '@/lib/storage';
 import { useAuth } from '@/contexts/auth-context';
 import AuthModal from './auth-modal';
 
@@ -19,18 +20,25 @@ interface ChatInterfaceProps {
   placesLoading: boolean;
   onFilterChange: (filter: PlaceFilter) => void;
   onSelectPlace: (placeName: string) => void;
+  isMobile?: boolean;
 }
 
-export default function ChatInterface({ places, placesWithRatings, placesLoading, onFilterChange, onSelectPlace }: ChatInterfaceProps) {
+export default function ChatInterface({ places, placesWithRatings, placesLoading, onFilterChange, onSelectPlace, isMobile = false }: ChatInterfaceProps) {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [lastFilter, setLastFilter] = useState<PlaceFilter>({});
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [guestQueriesRemaining, setGuestQueriesRemaining] = useState<number>(GUEST_CONFIG.MAX_FREE_QUERIES);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const { user, isLoading: authLoading } = useAuth();
+
+  // Initialize guest query count from localStorage
+  useEffect(() => {
+    setGuestQueriesRemaining(guestQueries.getRemainingCount());
+  }, []);
 
   const handleClear = () => {
     // Abort any pending request
@@ -182,18 +190,30 @@ export default function ChatInterface({ places, placesWithRatings, placesLoading
     }
   };
 
+  // Check if user can make a query (authenticated or has guest queries remaining)
+  const canMakeQuery = (): boolean => {
+    if (user) return true;
+    return guestQueries.hasRemainingQueries();
+  };
+
+  // Use a guest query and update state
+  const useGuestQuery = () => {
+    guestQueries.incrementUsed();
+    setGuestQueriesRemaining(guestQueries.getRemainingCount());
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || loading || isRetrying) return;
 
-    // Check if user is authenticated
-    if (!user) {
+    // Check if user can make query (authenticated or guest with remaining queries)
+    if (!canMakeQuery()) {
       const userMessage = input;
       setInput('');
       setMessages((prev) => [
         ...prev,
         { role: 'user', content: userMessage },
-        { role: 'assistant', content: 'Please create an account or sign in to use the AI chat feature. Click the button below to get started!' },
+        { role: 'assistant', content: "You've used all your free queries! Sign in for free to keep chatting and save your favorites." },
       ]);
       setShowAuthModal(true);
       return;
@@ -202,6 +222,11 @@ export default function ChatInterface({ places, placesWithRatings, placesLoading
     const userMessage = input;
     setInput('');
     setLoading(true);
+
+    // Track guest query usage
+    if (!user) {
+      useGuestQuery();
+    }
 
     const newMessages: ChatMessage[] = [...messages, { role: 'user', content: userMessage }];
     setMessages(newMessages);
@@ -212,15 +237,20 @@ export default function ChatInterface({ places, placesWithRatings, placesLoading
   const handleQuickQuestion = (question: string) => {
     if (loading || isRetrying) return;
 
-    // Check if user is authenticated
-    if (!user) {
+    // Check if user can make query (authenticated or guest with remaining queries)
+    if (!canMakeQuery()) {
       setMessages((prev) => [
         ...prev,
         { role: 'user', content: question },
-        { role: 'assistant', content: 'Please create an account or sign in to use the AI chat feature. Click the button below to get started!' },
+        { role: 'assistant', content: "You've used all your free queries! Sign in for free to keep chatting and save your favorites." },
       ]);
       setShowAuthModal(true);
       return;
+    }
+
+    // Track guest query usage
+    if (!user) {
+      useGuestQuery();
     }
 
     const newMessages: ChatMessage[] = [...messages, { role: 'user', content: question }];
@@ -233,7 +263,9 @@ export default function ChatInterface({ places, placesWithRatings, placesLoading
 
   return (
     <>
-    <div className="flex flex-col h-full bg-gradient-to-b from-white to-gray-50 border-l border-gray-200 shadow-2xl w-96 z-50">
+    <div className={`flex flex-col h-full bg-gradient-to-b from-white to-gray-50 z-50 ${
+      isMobile ? 'w-full' : 'w-96 border-l border-gray-200 shadow-2xl'
+    }`}>
       <div className="p-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-white/90 to-blue-50/50 backdrop-blur-md z-10 sticky top-0">
         <div>
           <h1 className="font-bold text-lg text-gray-900 leading-tight">{APP_INFO.NAME}</h1>
@@ -253,18 +285,32 @@ export default function ChatInterface({ places, placesWithRatings, placesLoading
         </div>
       </div>
 
-      {/* Auth Status Banner */}
+      {/* Guest Mode Banner */}
       {!authLoading && !user && (
-        <div className="px-4 py-2 bg-amber-50 border-b border-amber-100 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-amber-700 text-xs">
-            <Lock className="w-3.5 h-3.5" />
-            <span>Sign in to use AI chat</span>
+        <div className={`px-4 py-2 border-b flex items-center justify-between ${
+          guestQueriesRemaining > 0
+            ? 'bg-blue-50 border-blue-100'
+            : 'bg-amber-50 border-amber-100'
+        }`}>
+          <div className={`flex items-center gap-2 text-xs ${
+            guestQueriesRemaining > 0 ? 'text-blue-700' : 'text-amber-700'
+          }`}>
+            <MessageCircle className="w-3.5 h-3.5" />
+            <span>
+              {guestQueriesRemaining > 0
+                ? `${guestQueriesRemaining} free ${guestQueriesRemaining === 1 ? 'query' : 'queries'} left`
+                : 'Sign in for unlimited queries'}
+            </span>
           </div>
           <button
             onClick={() => setShowAuthModal(true)}
-            className="text-xs font-medium text-amber-700 hover:text-amber-800 underline"
+            className={`text-xs font-medium underline ${
+              guestQueriesRemaining > 0
+                ? 'text-blue-700 hover:text-blue-800'
+                : 'text-amber-700 hover:text-amber-800'
+            }`}
           >
-            Sign In
+            {guestQueriesRemaining > 0 ? 'Sign In' : 'Sign In Free'}
           </button>
         </div>
       )}

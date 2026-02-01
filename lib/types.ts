@@ -26,6 +26,7 @@ export interface PlaceFilter {
   keyword?: string | null;
   favorites?: boolean | null;
   search_terms?: string[];
+  halal_status?: string | null; // Filter by halal status (e.g., 'Certified')
 }
 
 // API response types

@@ -60,6 +60,12 @@ export async function POST(req: Request) {
       query = query.ilike('price_level', `%${priceLevel}%`);
     }
 
+    // Halal status filter - applied as AND
+    const halalStatus = sanitizeInput(filter.halal_status);
+    if (halalStatus) {
+      query = query.ilike('halal_status', `%${halalStatus}%`);
+    }
+
     // Handle search_terms array (legacy support) - loose OR search
     if (filter.search_terms && Array.isArray(filter.search_terms) && filter.search_terms.length > 0) {
       const orConditions: string[] = [];

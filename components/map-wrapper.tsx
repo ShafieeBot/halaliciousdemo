@@ -1,13 +1,16 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { APIProvider } from '@vis.gl/react-google-maps';
+import { MessageCircle, X, ChevronUp } from 'lucide-react';
 import RestaurantMap from '@/components/map';
 import ChatInterface from '@/components/chat';
 import PlaceDetailSidebar from '@/components/place-detail-sidebar';
 import FloatingMenu from '@/components/floating-menu';
 import FavoritesPanel from '@/components/favorites-panel';
 import MoreMenuPanel from '@/components/more-menu-panel';
+import MapLegend from '@/components/map-legend';
+import FilterBar from '@/components/filter-bar';
 import { Place, PlaceFilter } from '@/lib/types';
 import { favorites } from '@/lib/storage';
 
@@ -28,6 +31,17 @@ export default function MapWrapper({ initialPlaces }: MapWrapperProps) {
   const [showMore, setShowMore] = useState(false);
   const [isFiltering, setIsFiltering] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [activeFilters, setActiveFilters] = useState<PlaceFilter>({});
+  const [isMobile, setIsMobile] = useState(false);
+  const [showMobileChat, setShowMobileChat] = useState(false);
+
+  // Detect mobile viewport
+  useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth < 768);
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   // Cache for Google Places ratings
   const ratingsCache = useRef<Map<string, PlaceRating>>(new Map());
@@ -147,7 +161,8 @@ export default function MapWrapper({ initialPlaces }: MapWrapperProps) {
 
   return (
     <APIProvider apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || ''} libraries={['places']}>
-      <div className="flex h-screen w-full overflow-hidden">
+      <div className="flex flex-col md:flex-row h-screen w-full overflow-hidden">
+        {/* Main map area */}
         <div className="flex-1 relative flex">
           <PlaceDetailSidebar place={selectedPlace} onClose={() => setSelectedPlace(null)} />
 
@@ -196,6 +211,18 @@ export default function MapWrapper({ initialPlaces }: MapWrapperProps) {
               </div>
             )}
 
+            {/* Map Legend */}
+            <MapLegend className="hidden md:block" />
+
+            {/* Quick Filter Bar */}
+            <FilterBar
+              activeFilters={activeFilters}
+              onFilterChange={(filter) => {
+                setActiveFilters(filter);
+                handleFilter(filter);
+              }}
+            />
+
             <RestaurantMap
               places={places}
               selectedPlace={selectedPlace}
@@ -204,7 +231,67 @@ export default function MapWrapper({ initialPlaces }: MapWrapperProps) {
           </div>
         </div>
 
-        <ChatInterface places={places} placesWithRatings={placesWithRatings} placesLoading={isFiltering} onFilterChange={handleFilter} onSelectPlace={handleSelectPlaceByName} />
+        {/* Desktop: Right sidebar chat */}
+        <div className="hidden md:block">
+          <ChatInterface
+            places={places}
+            placesWithRatings={placesWithRatings}
+            placesLoading={isFiltering}
+            onFilterChange={handleFilter}
+            onSelectPlace={handleSelectPlaceByName}
+          />
+        </div>
+
+        {/* Mobile: Floating chat button */}
+        {isMobile && !showMobileChat && (
+          <button
+            onClick={() => setShowMobileChat(true)}
+            className="fixed bottom-6 right-4 z-50 flex items-center gap-2 px-4 py-3 bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-700 transition"
+          >
+            <MessageCircle className="w-5 h-5" />
+            <span className="text-sm font-medium">Ask AI</span>
+          </button>
+        )}
+
+        {/* Mobile: Bottom sheet chat */}
+        {isMobile && showMobileChat && (
+          <div className="fixed inset-0 z-50 flex flex-col">
+            {/* Backdrop */}
+            <div
+              className="flex-shrink-0 h-16 bg-black/30"
+              onClick={() => setShowMobileChat(false)}
+            />
+
+            {/* Bottom sheet */}
+            <div className="flex-1 bg-white rounded-t-2xl shadow-2xl overflow-hidden flex flex-col animate-in slide-in-from-bottom duration-300">
+              {/* Handle bar */}
+              <div className="flex items-center justify-center py-2 border-b border-gray-100">
+                <button
+                  onClick={() => setShowMobileChat(false)}
+                  className="flex items-center gap-2 px-4 py-1 text-gray-500 hover:text-gray-700"
+                >
+                  <ChevronUp className="w-5 h-5 rotate-180" />
+                  <span className="text-sm">Close</span>
+                </button>
+              </div>
+
+              {/* Chat content */}
+              <div className="flex-1 overflow-hidden">
+                <ChatInterface
+                  places={places}
+                  placesWithRatings={placesWithRatings}
+                  placesLoading={isFiltering}
+                  onFilterChange={handleFilter}
+                  onSelectPlace={(name) => {
+                    handleSelectPlaceByName(name);
+                    setShowMobileChat(false);
+                  }}
+                  isMobile
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </APIProvider>
   );
