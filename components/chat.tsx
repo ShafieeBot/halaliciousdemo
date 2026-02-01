@@ -8,11 +8,12 @@ import { hasNonEmptyValues, safeJsonParse } from '@/lib/utils';
 
 interface ChatInterfaceProps {
   places: Place[];
+  placesLoading: boolean;
   onFilterChange: (filter: PlaceFilter) => void;
   onSelectPlace: (placeName: string) => void;
 }
 
-export default function ChatInterface({ places, onFilterChange, onSelectPlace }: ChatInterfaceProps) {
+export default function ChatInterface({ places, placesLoading, onFilterChange, onSelectPlace }: ChatInterfaceProps) {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
@@ -223,7 +224,9 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
 
         {messages.map((m, i) => {
           // For assistant messages with showPlaces, use the places prop (same as map)
-          const displayPlaces = m.showPlaces
+          // Only show places when not loading to prevent showing stale data
+          const shouldShowPlaces = m.showPlaces && !placesLoading;
+          const displayPlaces = shouldShowPlaces
             ? places.slice(0, API_CONFIG.MAX_DISPLAY_PLACES).map((p) => ({
                 name: p.name,
                 cuisine: p.cuisine_subtype || p.cuisine_category || 'Halal',
@@ -239,6 +242,14 @@ export default function ChatInterface({ places, onFilterChange, onSelectPlace }:
               >
                 {m.content}
               </div>
+
+              {/* Show loading state while places are being fetched */}
+              {m.showPlaces && placesLoading && (
+                <div className="mt-2 w-[85%] flex items-center gap-2 text-gray-500 text-sm py-2">
+                  <div className="animate-spin rounded-full h-3 w-3 border-2 border-gray-400 border-t-transparent"></div>
+                  Loading places...
+                </div>
+              )}
 
               {displayPlaces.length > 0 && (
                 <div className="mt-2 w-[85%]">

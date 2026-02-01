@@ -131,7 +131,7 @@ export default function MapWrapper({ initialPlaces }: MapWrapperProps) {
           </div>
         </div>
 
-        <ChatInterface places={places} onFilterChange={handleFilter} onSelectPlace={handleSelectPlaceByName} />
+        <ChatInterface places={places} placesLoading={isFiltering} onFilterChange={handleFilter} onSelectPlace={handleSelectPlaceByName} />
       </div>
     </APIProvider>
   );
