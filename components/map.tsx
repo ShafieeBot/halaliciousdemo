@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
     Map,
     AdvancedMarker,
@@ -8,15 +8,18 @@ import {
     InfoWindow,
     useMap
 } from '@vis.gl/react-google-maps';
-import { MarkerClusterer, SuperClusterAlgorithm } from '@googlemaps/markerclusterer';
 import { Place } from '@/lib/types';
-import { MAP_CONFIG, getHalalStatusConfig, HALAL_STATUS } from '@/lib/constants';
+import { MAP_CONFIG, getHalalStatusConfig } from '@/lib/constants';
 
 interface MapProps {
     places: Place[];
     selectedPlace: Place | null;
     onSelectPlace: (place: Place | null) => void;
 }
+
+// Maximum markers to show at low zoom levels to reduce clutter
+const MAX_MARKERS_LOW_ZOOM = 100;
+const LOW_ZOOM_THRESHOLD = 12;
 
 export default function RestaurantMap({ places, selectedPlace, onSelectPlace }: MapProps) {
     const defaultCenter = MAP_CONFIG.DEFAULT_CENTER;
@@ -25,14 +28,20 @@ export default function RestaurantMap({ places, selectedPlace, onSelectPlace }: 
 
     const activePlace = hoveredPlace || selectedPlace;
 
-    // Threshold for showing individual markers vs clusters
-    const CLUSTER_ZOOM_THRESHOLD = 13;
-    const shouldCluster = currentZoom < CLUSTER_ZOOM_THRESHOLD;
+    // At low zoom levels, prioritize certified places and limit count to reduce clutter
+    const visiblePlaces = useMemo(() => {
+        if (currentZoom >= LOW_ZOOM_THRESHOLD) {
+            return places;
+        }
 
-    // At low zoom levels, only show certified places to reduce clutter
-    const visiblePlaces = shouldCluster
-        ? places.filter(p => p.halal_status === 'Certified' || p.halal_status === 'Muslim Friendly')
-        : places;
+        // At low zoom, prioritize certified, then muslim-friendly, limit total
+        const certified = places.filter(p => p.halal_status === 'Certified');
+        const muslimFriendly = places.filter(p => p.halal_status === 'Muslim Friendly');
+
+        // Combine and limit
+        const combined = [...certified, ...muslimFriendly];
+        return combined.slice(0, MAX_MARKERS_LOW_ZOOM);
+    }, [places, currentZoom]);
 
     const handleZoomChanged = useCallback((zoom: number) => {
         setCurrentZoom(zoom);
@@ -48,25 +57,18 @@ export default function RestaurantMap({ places, selectedPlace, onSelectPlace }: 
                 gestureHandling={'greedy'}
                 onZoomChanged={(e) => handleZoomChanged(e.detail.zoom)}
             >
-                {shouldCluster ? (
-                    <ClusteredMarkers
-                        places={visiblePlaces}
-                        onSelectPlace={onSelectPlace}
-                    />
-                ) : (
-                    visiblePlaces.map((place) => {
-                        if (!place.lat || !place.lng) return null;
-                        return (
-                            <RestaurantMarker
-                                key={place.id}
-                                place={place}
-                                onClick={(p) => onSelectPlace(p)}
-                                onMouseEnter={(p) => setHoveredPlace(p)}
-                                onMouseLeave={() => setHoveredPlace(null)}
-                            />
-                        );
-                    })
-                )}
+                {visiblePlaces.map((place) => {
+                    if (!place.lat || !place.lng) return null;
+                    return (
+                        <RestaurantMarker
+                            key={place.id}
+                            place={place}
+                            onClick={(p) => onSelectPlace(p)}
+                            onMouseEnter={(p) => setHoveredPlace(p)}
+                            onMouseLeave={() => setHoveredPlace(null)}
+                        />
+                    );
+                })}
 
                 {activePlace && activePlace.lat && activePlace.lng && (
                     <InfoWindow
@@ -89,115 +91,6 @@ export default function RestaurantMap({ places, selectedPlace, onSelectPlace }: 
     );
 }
 
-// Clustered markers component
-function ClusteredMarkers({
-    places,
-    onSelectPlace
-}: {
-    places: Place[];
-    onSelectPlace: (place: Place) => void;
-}) {
-    const map = useMap();
-    const clustererRef = useRef<MarkerClusterer | null>(null);
-    const markersRef = useRef<google.maps.marker.AdvancedMarkerElement[]>([]);
-
-    useEffect(() => {
-        if (!map) return;
-
-        // Clear existing markers
-        markersRef.current.forEach(marker => {
-            marker.map = null;
-        });
-        markersRef.current = [];
-
-        if (clustererRef.current) {
-            clustererRef.current.clearMarkers();
-        }
-
-        // Create markers for each place
-        const markers = places
-            .filter(p => p.lat && p.lng)
-            .map(place => {
-                const statusConfig = getHalalStatusConfig(place.halal_status);
-
-                // Create custom marker element
-                const content = document.createElement('div');
-                content.innerHTML = `
-                    <div style="
-                        width: 12px;
-                        height: 12px;
-                        background-color: ${statusConfig.color};
-                        border: 2px solid ${statusConfig.borderColor};
-                        border-radius: 50%;
-                        cursor: pointer;
-                    "></div>
-                `;
-
-                const marker = new google.maps.marker.AdvancedMarkerElement({
-                    position: { lat: place.lat!, lng: place.lng! },
-                    content: content,
-                    title: place.name,
-                });
-
-                marker.addListener('click', () => {
-                    onSelectPlace(place);
-                });
-
-                return marker;
-            });
-
-        markersRef.current = markers;
-
-        // Create or update clusterer
-        if (!clustererRef.current) {
-            clustererRef.current = new MarkerClusterer({
-                map,
-                markers,
-                algorithm: new SuperClusterAlgorithm({ radius: 100 }),
-                renderer: {
-                    render: ({ count, position }) => {
-                        // Custom cluster renderer
-                        const content = document.createElement('div');
-                        const size = Math.min(60, 30 + Math.log(count) * 10);
-                        content.innerHTML = `
-                            <div style="
-                                width: ${size}px;
-                                height: ${size}px;
-                                background: linear-gradient(135deg, ${HALAL_STATUS.CERTIFIED.color}, ${HALAL_STATUS.MUSLIM_FRIENDLY.color});
-                                border: 3px solid white;
-                                border-radius: 50%;
-                                display: flex;
-                                align-items: center;
-                                justify-content: center;
-                                color: white;
-                                font-weight: bold;
-                                font-size: ${Math.max(12, size / 3)}px;
-                                box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-                                cursor: pointer;
-                            ">${count}</div>
-                        `;
-                        return new google.maps.marker.AdvancedMarkerElement({
-                            position,
-                            content,
-                        });
-                    },
-                },
-            });
-        } else {
-            clustererRef.current.clearMarkers();
-            clustererRef.current.addMarkers(markers);
-        }
-
-        return () => {
-            markersRef.current.forEach(marker => {
-                marker.map = null;
-            });
-        };
-    }, [map, places, onSelectPlace]);
-
-    return null;
-}
-
 function MapUpdater({ places, selectedPlace }: { places: Place[], selectedPlace: Place | null }) {
     const map = useMap();
 
@@ -212,7 +105,6 @@ function MapUpdater({ places, selectedPlace }: { places: Place[], selectedPlace:
         }
 
         // Don't auto-fit bounds on initial load - let user explore from Tokyo center
-        // Only fit bounds if we have filtered results (less than initial load)
     }, [selectedPlace, map]);
 
     return null;
