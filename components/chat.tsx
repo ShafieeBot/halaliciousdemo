@@ -311,23 +311,40 @@ export default function ChatInterface({ places, placesWithRatings, placesLoading
               )}
 
               {displayPlaces.length > 0 && (
-                <div className="mt-2 w-[85%]">
-                  <ul className="space-y-1">
-                    {displayPlaces.map((place, idx) => (
-                      <li key={idx}>
-                        <button
-                          onClick={() => onSelectPlace(place.name)}
-                          className="w-full text-left py-1 px-1 hover:bg-gray-50 rounded transition flex items-start gap-2 group"
-                        >
-                          <MapPin className="w-4 h-4 mt-0.5 text-gray-400 group-hover:text-blue-500" />
-                          <div>
-                            <div className="text-sm font-medium text-gray-800">{place.name}</div>
-                            <div className="text-xs text-gray-500">{place.cuisine}</div>
+                <div className="mt-2 w-[85%] space-y-2">
+                  {displayPlaces.map((place, idx) => {
+                    // Find the full place data with ratings
+                    const placeData = placesWithRatings.find((p) => p.name === place.name) ||
+                      places.find((p) => p.name === place.name);
+                    const placeWithRating = placeData as PlaceWithRating | undefined;
+
+                    return (
+                      <button
+                        key={idx}
+                        onClick={() => onSelectPlace(place.name)}
+                        className="w-full text-left p-3 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl transition flex items-start gap-3 group"
+                      >
+                        <div className="bg-blue-100 p-2 rounded-lg group-hover:bg-blue-200 transition">
+                          <MapPin className="w-5 h-5 text-blue-600" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-semibold text-gray-900 truncate">{place.name}</div>
+                          <div className="text-xs text-gray-600">
+                            {place.cuisine}
+                            {placeData?.city && ` • ${placeData.city}`}
                           </div>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
+                          {placeWithRating?.google_rating && (
+                            <div className="text-xs text-yellow-600 font-medium mt-1">
+                              ⭐ {placeWithRating.google_rating}/5
+                              {placeWithRating.google_ratings_total &&
+                                ` (${placeWithRating.google_ratings_total} reviews)`}
+                            </div>
+                          )}
+                        </div>
+                        <div className="text-blue-500 text-xs font-medium self-center">View →</div>
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
