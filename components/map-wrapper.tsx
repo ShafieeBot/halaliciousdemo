@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { APIProvider } from '@vis.gl/react-google-maps';
 import RestaurantMap from '@/components/map';
 import ChatInterface from '@/components/chat';
@@ -9,6 +9,12 @@ import FloatingMenu from '@/components/floating-menu';
 import FavoritesPanel from '@/components/favorites-panel';
 import { Place, PlaceFilter } from '@/lib/types';
 import { favorites } from '@/lib/storage';
+
+interface PlaceRating {
+  place_id: string;
+  rating?: number;
+  user_ratings_total?: number;
+}
 
 interface MapWrapperProps {
   initialPlaces: Place[];
@@ -20,6 +26,55 @@ export default function MapWrapper({ initialPlaces }: MapWrapperProps) {
   const [showFavorites, setShowFavorites] = useState(false);
   const [isFiltering, setIsFiltering] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+
+  // Cache for Google Places ratings
+  const ratingsCache = useRef<Map<string, PlaceRating>>(new Map());
+  const [placesWithRatings, setPlacesWithRatings] = useState<(Place & { google_rating?: number; google_ratings_total?: number })[]>([]);
+
+  // Fetch ratings for places from Google Places API
+  const fetchRatings = async (placesToFetch: Place[]) => {
+    // Get place_ids that we don't have cached
+    const uncachedPlaces = placesToFetch.filter(
+      (p) => p.place_id && !ratingsCache.current.has(p.place_id)
+    );
+
+    if (uncachedPlaces.length > 0) {
+      try {
+        const placeIds = uncachedPlaces.map((p) => p.place_id).filter(Boolean) as string[];
+        const response = await fetch('/api/places/ratings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ placeIds }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const ratings: PlaceRating[] = data.ratings || [];
+
+          // Cache the results
+          ratings.forEach((r) => {
+            if (r.place_id) {
+              ratingsCache.current.set(r.place_id, r);
+            }
+          });
+        }
+      } catch (e) {
+        console.error('Failed to fetch ratings:', e);
+      }
+    }
+
+    // Merge ratings into places
+    const enriched = placesToFetch.map((p) => {
+      const cached = p.place_id ? ratingsCache.current.get(p.place_id) : undefined;
+      return {
+        ...p,
+        google_rating: cached?.rating,
+        google_ratings_total: cached?.user_ratings_total,
+      };
+    });
+
+    setPlacesWithRatings(enriched);
+  };
 
   /**
    * AI-driven filtering:
@@ -64,6 +119,9 @@ export default function MapWrapper({ initialPlaces }: MapWrapperProps) {
 
       const newPlaces: Place[] = Array.isArray(data?.places) ? data.places : [];
       setPlaces(newPlaces);
+
+      // Fetch Google ratings for the top places (for AI context)
+      fetchRatings(newPlaces.slice(0, 10));
 
       // Close sidebar if selected place is no longer visible
       if (selectedPlace && !newPlaces.some((p) => p.id === selectedPlace.id)) {
@@ -131,7 +189,7 @@ export default function MapWrapper({ initialPlaces }: MapWrapperProps) {
           </div>
         </div>
 
-        <ChatInterface places={places} placesLoading={isFiltering} onFilterChange={handleFilter} onSelectPlace={handleSelectPlaceByName} />
+        <ChatInterface places={places} placesWithRatings={placesWithRatings} placesLoading={isFiltering} onFilterChange={handleFilter} onSelectPlace={handleSelectPlaceByName} />
       </div>
     </APIProvider>
   );

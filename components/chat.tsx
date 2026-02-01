@@ -6,14 +6,20 @@ import { Place, PlaceFilter, ChatMessage } from '@/lib/types';
 import { API_CONFIG, APP_INFO } from '@/lib/constants';
 import { hasNonEmptyValues, safeJsonParse } from '@/lib/utils';
 
+interface PlaceWithRating extends Place {
+  google_rating?: number;
+  google_ratings_total?: number;
+}
+
 interface ChatInterfaceProps {
   places: Place[];
+  placesWithRatings: PlaceWithRating[];
   placesLoading: boolean;
   onFilterChange: (filter: PlaceFilter) => void;
   onSelectPlace: (placeName: string) => void;
 }
 
-export default function ChatInterface({ places, placesLoading, onFilterChange, onSelectPlace }: ChatInterfaceProps) {
+export default function ChatInterface({ places, placesWithRatings, placesLoading, onFilterChange, onSelectPlace }: ChatInterfaceProps) {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
@@ -40,13 +46,20 @@ export default function ChatInterface({ places, placesLoading, onFilterChange, o
 
     try {
       // Include current places context for follow-up questions
-      const placesContext = places.slice(0, API_CONFIG.MAX_DISPLAY_PLACES).map((p) => ({
-        name: p.name,
-        cuisine: p.cuisine_subtype || p.cuisine_category,
-        city: p.city,
-        price_level: p.price_level,
-        halal_status: p.halal_status,
-      }));
+      // Use placesWithRatings if available (has Google ratings), otherwise use places
+      const sourcePlaces = placesWithRatings.length > 0 ? placesWithRatings : places;
+      const placesContext = sourcePlaces.slice(0, API_CONFIG.MAX_DISPLAY_PLACES).map((p) => {
+        const placeWithRating = p as PlaceWithRating;
+        return {
+          name: p.name,
+          cuisine: p.cuisine_subtype || p.cuisine_category,
+          city: p.city,
+          price_level: p.price_level,
+          halal_status: p.halal_status,
+          rating: placeWithRating.google_rating,
+          reviews_count: placeWithRating.google_ratings_total,
+        };
+      });
 
       const response = await fetch('/api/chat', {
         method: 'POST',

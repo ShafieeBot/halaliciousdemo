@@ -27,9 +27,16 @@ export async function POST(req: Request) {
     let contextMessage = '';
     if (context?.currentPlaces && Array.isArray(context.currentPlaces) && context.currentPlaces.length > 0) {
       const placesList = context.currentPlaces
-        .map((p: { name: string; cuisine?: string; city?: string; price_level?: string; halal_status?: string }, i: number) =>
-          `${i + 1}. ${p.name} (${p.cuisine || 'Halal'}${p.city ? `, ${p.city}` : ''}${p.price_level ? `, Price: ${p.price_level}` : ''}${p.halal_status ? `, Status: ${p.halal_status}` : ''})`
-        )
+        .map((p: { name: string; cuisine?: string; city?: string; price_level?: string; halal_status?: string; rating?: number; reviews_count?: number }, i: number) => {
+          let info = `${i + 1}. ${p.name} (${p.cuisine || 'Halal'}`;
+          if (p.city) info += `, ${p.city}`;
+          if (p.rating) info += `, Rating: ${p.rating}/5`;
+          if (p.reviews_count) info += ` (${p.reviews_count} reviews)`;
+          if (p.price_level) info += `, Price: ${p.price_level}`;
+          if (p.halal_status) info += `, ${p.halal_status}`;
+          info += ')';
+          return info;
+        })
         .join('\n');
       contextMessage = `\n\nCURRENT SEARCH RESULTS (use these for follow-up questions):\n${placesList}`;
     }
