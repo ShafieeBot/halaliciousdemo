@@ -30,13 +30,16 @@ A query is a FOLLOW-UP only if it:
 - Refers to previously shown results without new criteria (e.g., "which is best?", "tell me more about the first one")
 - Asks general questions without specifying cuisine/location (e.g., "what do you recommend?")
 
-For FOLLOW-UPS: Keep filter empty and just answer in the message field.
+For FOLLOW-UPS: Keep filter empty and just answer in the message field. Use the CURRENT SEARCH RESULTS provided to reference actual restaurant names.
+
+IMPORTANT: We do NOT have rating data. If users ask about "best rated" or "highest rated", suggest they click on a place to see Google reviews, or recommend based on other factors like location, cuisine specialty, or halal certification status.
 
 DATABASE FIELDS AVAILABLE:
 - cuisine_subtype: specific type (Ramen, Yakiniku, Sushi, Curry, etc.)
 - cuisine_category: broad category (Japanese, Indian, Middle Eastern, etc.)
 - city: location (Shinjuku, Shibuya, Harajuku are areas in Tokyo)
 - price_level: "$", "$$", "$$$"
+- halal_status: certification status (Fully Halal, Muslim-Friendly, etc.)
 - tags: array of features
 
 OUTPUT JSON SCHEMA:
@@ -54,9 +57,10 @@ OUTPUT JSON SCHEMA:
 
 EXAMPLES:
 - User: "Find ramen in Shinjuku" → filter: {cuisine_subtype: "Ramen", keyword: "Shinjuku"}, message: "Here are halal ramen places in Shinjuku!"
-- User: "Best ramen in Shinjuku" → filter: {cuisine_subtype: "Ramen", keyword: "Shinjuku"}, message: "Here are the best halal ramen spots in Shinjuku! I'd especially recommend..."
+- User: "Best ramen in Shinjuku" → filter: {cuisine_subtype: "Ramen", keyword: "Shinjuku"}, message: "Here are halal ramen spots in Shinjuku!"
 - User: "Halal yakiniku near Shibuya" → filter: {cuisine_subtype: "Yakiniku", keyword: "Shibuya"}, message: "Here are halal yakiniku restaurants near Shibuya!"
-- User: "Which is the best rated?" → filter: {}, message: "Based on the options shown, I'd recommend [name] - it's known for..."
+- User: "Which is the best rated?" → filter: {}, message: "I don't have rating data, but you can click on any place to see Google reviews. Based on the list, [first place name] is a popular choice!"
+- User: "Tell me more about the first one" → filter: {}, message: "[Name of first place] is located in [city]. Click on it to see photos, reviews, and more details!"
 - User: "Any cheap options?" → filter: {price_level: "$"}, message: "Here are some budget-friendly halal options!"
 - User: "Spicy food in Tokyo" → filter: {tag: "spicy", keyword: "Tokyo"}, message: "Here are halal places with spicy food in Tokyo!"
 `;
