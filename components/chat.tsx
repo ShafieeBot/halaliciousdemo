@@ -44,8 +44,8 @@ export default function ChatInterface({ places, placesLoading, onFilterChange, o
         name: p.name,
         cuisine: p.cuisine_subtype || p.cuisine_category,
         city: p.city,
-        rating: p.rating,
         price_level: p.price_level,
+        halal_status: p.halal_status,
       }));
 
       const response = await fetch('/api/chat', {
